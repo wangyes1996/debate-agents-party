@@ -9,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .core.config_store import load_config, save_config, update_partial, DEFAULT_CONFIG
+from .core.config_store import load_config, save_config, update_partial
 from .core.debate_engine import DebateEngine
 from .api.market import fetch_market, format_market_summary
 from .agents.personas import PERSONAS
@@ -44,17 +44,16 @@ async def personas():
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
-    # mask api keys for transit
     safe = json.loads(json.dumps(cfg))
-    for p in safe.get("providers", {}).values():
-        if p.get("api_key"):
-            p["api_key"] = "***" + p["api_key"][-4:]
+    for c in safe.get("llm_configs", []):
+        if c.get("api_key"):
+            c["api_key"] = "***" + c["api_key"][-4:]
     return safe
 
 
 class ConfigPatch(BaseModel):
-    active_provider: str | None = None
-    providers: dict | None = None
+    llm_configs: list | None = None
+    default_llm_id: str | None = None
     agents: dict | None = None
     data_source: dict | None = None
 
@@ -63,11 +62,13 @@ class ConfigPatch(BaseModel):
 async def set_config(patch: ConfigPatch):
     payload = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
     # never overwrite api_key with masked placeholder
-    if "providers" in payload:
-        cur = load_config().get("providers", {})
-        for pname, pcfg in payload["providers"].items():
-            if isinstance(pcfg, dict) and pcfg.get("api_key", "").startswith("***"):
-                pcfg["api_key"] = cur.get(pname, {}).get("api_key", "")
+    if "llm_configs" in payload:
+        cur_configs = {c["id"]: c for c in load_config().get("llm_configs", []) if c.get("id")}
+        for c in payload["llm_configs"]:
+            if isinstance(c, dict):
+                ak = c.get("api_key", "") or ""
+                if ak.startswith("***") and c.get("id") in cur_configs:
+                    c["api_key"] = cur_configs[c["id"]].get("api_key", "")
     update_partial(payload)
     return {"ok": True}
 

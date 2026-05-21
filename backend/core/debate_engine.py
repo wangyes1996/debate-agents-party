@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from .llm import chat
+from .llm import chat, chat_stream
 from .config_store import load_config
 from ..agents.personas import PERSONAS
 from ..api.market import fetch_market, format_market_summary
@@ -64,12 +64,19 @@ class DebateEngine:
         self.topic = topic
         self.queue = queue
         self.history: list[DebateMessage] = []
-        self.user_interjections: list[str] = []  # pending user messages
+        # Each pending interjection: {"id": str, "text": str, "addressed_by": set[str]}
+        self.pending_user_msgs: list[dict] = []
         self.cancelled = False
         cfg = load_config()
         self.roles: list[str] = cfg["agents"].get("enabled_roles", ["bull", "bear", "risk"])
         self.max_rounds: int = int(cfg["agents"].get("max_rounds", 3))
+        self.role_llm: dict = cfg["agents"].get("role_llm", {}) or {}
         self.data_cfg = cfg.get("data_source", {})
+
+    def _provider_for(self, role: str) -> str | None:
+        """Resolve which llm_id to use for a role; None = use default."""
+        p = self.role_llm.get(role, "")
+        return p or None
 
     async def _emit(self, msg: DebateMessage):
         self.history.append(msg)
@@ -81,27 +88,152 @@ class DebateEngine:
     def add_user_message(self, text: str):
         msg = _build_msg("user", text, rnd=-1)
         self.history.append(msg)
-        self.user_interjections.append(text)
-        # also broadcast immediately so all clients see it
+        # Track as pending — every agent must address it once
+        pending = {"id": msg.id, "text": text, "addressed_by": set()}
+        self.pending_user_msgs.append(pending)
+        # Broadcast user message immediately so all clients see it
         asyncio.create_task(self.queue.put({"type": "message", "data": msg.to_dict()}))
+        # Broadcast a high-visibility status so UI knows agents are about to respond
+        n_pending = len([r for r in self.roles if r not in pending["addressed_by"]])
+        asyncio.create_task(self.queue.put({
+            "type": "status",
+            "data": {"text": f"⚡ 用户插话已广播,{n_pending} 位待回应", "ts": time.time()},
+        }))
+
+    def _unaddressed_for(self, role: str) -> list[dict]:
+        return [m for m in self.pending_user_msgs if role not in m["addressed_by"]]
+
+    def _mark_addressed(self, role: str):
+        for m in self.pending_user_msgs:
+            m["addressed_by"].add(role)
 
     def _build_context(self, last_n: int = 12) -> str:
         recent = self.history[-last_n:]
         lines = []
         for m in recent:
-            tag = f"[{m.name}]" if m.role != "user" else "[👤 用户]"
+            if m.role == "user":
+                tag = "[👤 用户]"
+            else:
+                tag = f"[第{m.round}轮·{m.name}]" if m.round > 0 else f"[{m.name}]"
             lines.append(f"{tag} {m.content}")
         return "\n".join(lines)
+
+    def _prior_speakers_summary(self, current_role: str) -> str:
+        """List who has spoken before (this debate), with their last 1-line takeaway."""
+        seen: dict[str, "DebateMessage"] = {}
+        for m in self.history:
+            if m.role in ("system", "user", "moderator"):
+                continue
+            if m.role == current_role:
+                continue
+            seen[m.role] = m  # keep the latest one per role
+        if not seen:
+            return ""
+        lines = []
+        for r, m in seen.items():
+            snippet = m.content.strip().replace("\n", " ")
+            if len(snippet) > 80:
+                snippet = snippet[:80] + "..."
+            lines.append(f"- {m.emoji} {m.name}(第{m.round}轮):「{snippet}」")
+        return "\n".join(lines)
+
+    async def _emit_thinking(self, role: str, on: bool):
+        p = _persona(role)
+        await self.queue.put({
+            "type": "thinking",
+            "data": {
+                "role": role,
+                "on": on,
+                "name": p["name"],
+                "emoji": p["emoji"],
+                "color": p["color"],
+                "ts": time.time(),
+            },
+        })
+
+    async def _stream_speak(self, role: str, messages: list, rnd: int, temperature: float = 0.8) -> str:
+        """Stream tokens as they arrive. Emits stream_start / stream_chunk / stream_end."""
+        p = _persona(role)
+        msg_id = str(uuid.uuid4())
+        # announce start so client can create an empty bubble
+        await self.queue.put({
+            "type": "stream_start",
+            "data": {
+                "id": msg_id,
+                "role": role,
+                "name": p["name"],
+                "emoji": p["emoji"],
+                "color": p["color"],
+                "round": rnd,
+                "ts": time.time(),
+            },
+        })
+        buf = ""
+        try:
+            async for delta in chat_stream(messages, llm_id=self._provider_for(role), temperature=temperature):
+                if self.cancelled:
+                    break
+                buf += delta
+                await self.queue.put({
+                    "type": "stream_chunk",
+                    "data": {"id": msg_id, "delta": delta},
+                })
+        except Exception as e:
+            err = f"\n\n(发言失败:{e})"
+            buf += err
+            await self.queue.put({
+                "type": "stream_chunk",
+                "data": {"id": msg_id, "delta": err},
+            })
+
+        # Persist into history as a normal message and notify end
+        full = buf.strip()
+        msg = DebateMessage(
+            id=msg_id,
+            role=role,
+            name=p["name"],
+            emoji=p["emoji"],
+            color=p["color"],
+            content=full,
+            round=rnd,
+            ts=time.time(),
+        )
+        self.history.append(msg)
+        await self.queue.put({
+            "type": "stream_end",
+            "data": {"id": msg_id, "content": full, "ts": time.time()},
+        })
+        return full
 
     async def _agent_speak(self, role: str, market_summary: str, rnd: int):
         if self.cancelled:
             return
         p = _persona(role)
-        ctx = self._build_context()
+        # short pre-stream "thinking" indicator (cleared by stream_start on the client)
+        await self._emit_thinking(role, True)
+        ctx = self._build_context(last_n=20)
         user_note = ""
-        if self.user_interjections:
-            interj = "\n".join(f"- {t}" for t in self.user_interjections)
-            user_note = f"\n\n【用户刚刚的发言,请认真考虑】\n{interj}"
+        unaddressed = self._unaddressed_for(role)
+        if unaddressed:
+            interj = "\n".join(f"- 「{m['text']}」" for m in unaddressed)
+            user_note = (
+                f"\n\n🚨🚨🚨【最高优先级·用户刚刚插话,你必须先回应】🚨🚨🚨\n"
+                f"{interj}\n"
+                f"⚠️ 在你发言的**第一句**就要直接 @用户 回应这条插话(同意/反驳/解答疑问/补充信息),"
+                f"然后再继续辩论。不要忽略,不要敷衍。"
+            )
+
+        prior = self._prior_speakers_summary(current_role=role)
+        roundtable_hint = ""
+        if prior:
+            roundtable_hint = (
+                f"\n\n【🪑 圆桌上其他人最近的观点(可以 @点名 任何一位回应/反驳/追问)】\n"
+                f"{prior}\n"
+                f"💡 你必须 @点名至少 1 位、推荐 2 位,具体引用 ta 的关键词,不要泛泛说「同意」。"
+            )
+        else:
+            roundtable_hint = "\n\n(你是第一位发言者,直接亮明你({})的观点,后续大家会回应你。)".format(p["name"])
+
         messages = [
             {"role": "system", "content": p["system"]},
             {
@@ -110,16 +242,23 @@ class DebateEngine:
                     f"辩论议题:{self.topic}\n\n"
                     f"【最新市场数据】\n{market_summary}\n\n"
                     f"【目前为止的辩论记录】\n{ctx or '(刚开始)'}"
-                    f"{user_note}\n\n"
+                    f"{user_note}"
+                    f"{roundtable_hint}\n\n"
                     f"现在轮到你({p['name']})发言。这是第 {rnd}/{self.max_rounds} 轮。"
                 ),
             },
         ]
         try:
-            content = await chat(messages, temperature=0.8)
-        except Exception as e:
-            content = f"(发言失败:{e})"
-        await self._emit(_build_msg(role, content.strip(), rnd))
+            await self._stream_speak(role, messages, rnd, temperature=0.8)
+        finally:
+            await self._emit_thinking(role, False)
+        # mark this role as having addressed all currently-pending user msgs
+        self._mark_addressed(role)
+        # GC: drop interjections that all enabled roles have addressed
+        self.pending_user_msgs = [
+            m for m in self.pending_user_msgs
+            if not all(r in m["addressed_by"] for r in self.roles)
+        ]
 
     async def _moderator_intro(self, market_summary: str):
         roles_intro = ", ".join(_persona(r)["emoji"] + _persona(r)["name"] for r in self.roles)
@@ -133,24 +272,27 @@ class DebateEngine:
         await self._emit(_build_msg("moderator", intro, 0))
 
     async def _moderator_summarize(self, rnd: int):
+        await self._emit_thinking("moderator", True)
         ctx = self._build_context(last_n=20)
         messages = [
             {"role": "system", "content": _persona("moderator")["system"]},
             {
                 "role": "user",
                 "content": (
-                    f"以下是第 {rnd} 轮的发言记录,请做 2-3 句中立小结,"
-                    f"并提出下一轮的焦点问题。如果有用户发言务必关注。\n\n{ctx}"
+                    f"以下是第 {rnd} 轮的圆桌发言。请按以下结构做小结(共 3-4 句):\n"
+                    f"1. **共识点**:点名「@A 和 @B 都认同 X」\n"
+                    f"2. **分歧点**:点名「@C 和 @D 在 Y 问题上有冲突,C 认为...,D 认为...」\n"
+                    f"3. **下一轮焦点问题**:针对最大分歧抛一个具体问题,@点名希望谁先回答。\n"
+                    f"如果有用户发言务必融入提问。\n\n{ctx}"
                 ),
             },
         ]
         try:
-            content = await chat(messages, temperature=0.5)
-        except Exception as e:
-            content = f"(主持人总结失败:{e})"
-        await self._emit(_build_msg("moderator", content.strip(), rnd))
-        # clear interjections that have been consumed by the moderator
-        self.user_interjections.clear()
+            await self._stream_speak("moderator", messages, rnd, temperature=0.5)
+        finally:
+            await self._emit_thinking("moderator", False)
+        # moderator also "addresses" pending user msgs (acknowledged in summary)
+        self._mark_addressed("moderator")
 
     async def _final_verdict(self):
         ctx = self._build_context(last_n=40)
@@ -170,10 +312,9 @@ class DebateEngine:
             },
         ]
         try:
-            content = await chat(messages, temperature=0.4)
+            await self._stream_speak("moderator", messages, self.max_rounds + 1, temperature=0.4)
         except Exception as e:
-            content = f"(最终决议生成失败:{e})"
-        await self._emit(_build_msg("moderator", "🏁 **最终决议**\n\n" + content.strip(), self.max_rounds + 1))
+            await self._emit(_build_msg("moderator", f"(最终决议生成失败:{e})", self.max_rounds + 1))
 
     async def run(self):
         try:

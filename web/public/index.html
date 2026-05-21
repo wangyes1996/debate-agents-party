@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Debate Agents Party</title>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">⚔️ Debate Agents Party</div>
+  <nav>
+    <a href="/" class="active">首页</a>
+    <a href="/config">配置</a>
+  </nav>
+</div>
+<div class="container">
+  <div class="card">
+    <h1>开一场加密辩论 🎙️</h1>
+    <p class="muted">主持人 + 多角色分析师围坐圆桌,实时辩论你给的议题。你随时可以插话,所有 agent 第一时间响应。</p>
+  </div>
+
+  <div class="card">
+    <div class="field">
+      <label>议题</label>
+      <textarea id="topic" placeholder="例:BTC 当前是抄底机会还是诱多?"></textarea>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:1">
+        <label>交易对</label>
+        <input type="text" id="symbol" value="BTCUSDT" />
+      </div>
+      <div class="field" style="flex:1">
+        <label>数据源</label>
+        <select id="source">
+          <option value="binance">Binance</option>
+          <option value="coingecko">CoinGecko</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1">
+        <label>轮次</label>
+        <input type="number" id="rounds" value="3" min="1" max="10" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>参与角色(点击选/取消)</label>
+      <div class="role-grid" id="roles"></div>
+    </div>
+
+    <div class="field">
+      <label>默认 LLM</label>
+      <select id="llm"></select>
+      <span class="muted">在 <a href="/config">配置页</a> 可增删 LLM 与单角色覆盖</span>
+    </div>
+
+    <button id="start">🚀 开始辩论</button>
+    <span id="msg" class="muted" style="margin-left:10px"></span>
+  </div>
+</div>
+
+<script src="/vendor/jquery.min.js"></script>
+<script src="/js/index.js"></script>
+</body>
+</html>

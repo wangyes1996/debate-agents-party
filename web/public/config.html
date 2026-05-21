@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>配置 · Debate Agents Party</title>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">⚔️ Debate Agents Party</div>
+  <nav>
+    <a href="/">首页</a>
+    <a href="/config" class="active">配置</a>
+  </nav>
+</div>
+<div class="container">
+  <div class="card">
+    <h1>LLM 配置</h1>
+    <p class="muted">这里管理所有可用的 LLM(火山方舟、OpenAI、本地…),以及每个角色用哪一个。修改后点保存生效。</p>
+  </div>
+
+  <div class="card">
+    <h2>LLM 列表</h2>
+    <div class="llm-list" id="llms"></div>
+    <button id="add-llm" class="ghost" style="margin-top:10px">+ 添加 LLM</button>
+  </div>
+
+  <div class="card">
+    <h2>默认 LLM</h2>
+    <select id="default-llm"></select>
+  </div>
+
+  <div class="card">
+    <h2>每个角色单独覆盖(留空=用默认)</h2>
+    <div id="role-overrides"></div>
+  </div>
+
+  <div class="row">
+    <button id="save">💾 保存</button>
+    <span id="msg" class="muted"></span>
+  </div>
+</div>
+<script src="/vendor/jquery.min.js"></script>
+<script src="/js/config.js"></script>
+</body>
+</html>

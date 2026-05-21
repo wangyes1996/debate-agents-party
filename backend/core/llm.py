@@ -1,35 +1,26 @@
-"""LLM client factory - supports multi-provider via OpenAI-compatible API."""
+"""LLM client factory - look up llm_config by id (or default)."""
 from __future__ import annotations
-import os
 from openai import AsyncOpenAI
-from .config_store import load_config
+from .config_store import load_config, find_llm
 
 
-def _provider_settings(provider: str) -> dict:
-    """Return base_url + api_key + model for a provider."""
+def get_client(llm_id: str | None = None) -> tuple[AsyncOpenAI, str, str]:
+    """Return (client, model_name, llm_name) for the chosen LLM config."""
     cfg = load_config()
-    p = cfg.get("providers", {}).get(provider, {})
-    return {
-        "api_key": p.get("api_key") or os.getenv(f"{provider.upper()}_API_KEY", ""),
-        "base_url": p.get("base_url"),
-        "model": p.get("model", "gpt-4o-mini"),
-    }
+    llm = find_llm(cfg, llm_id)
+    if not llm:
+        raise RuntimeError("No LLM configs defined. Add one on /config page.")
+    if not llm.get("api_key"):
+        raise RuntimeError(f"LLM '{llm.get('name')}' has no API key. Set it on /config page.")
+    if not llm.get("model"):
+        raise RuntimeError(f"LLM '{llm.get('name')}' has no model name. Set it on /config page.")
+    client = AsyncOpenAI(api_key=llm["api_key"], base_url=llm.get("base_url") or None)
+    return client, llm["model"], llm.get("name", "")
 
 
-def get_client(provider: str | None = None) -> tuple[AsyncOpenAI, str]:
-    """Return (client, model_name) for the configured provider."""
-    cfg = load_config()
-    provider = provider or cfg.get("active_provider", "openai")
-    s = _provider_settings(provider)
-    if not s["api_key"]:
-        raise RuntimeError(f"No API key configured for provider '{provider}'. Set it on /config page.")
-    client = AsyncOpenAI(api_key=s["api_key"], base_url=s["base_url"] or None)
-    return client, s["model"]
-
-
-async def chat(messages: list[dict], provider: str | None = None, temperature: float = 0.7) -> str:
+async def chat(messages: list[dict], llm_id: str | None = None, temperature: float = 0.7) -> str:
     """Single-shot chat completion."""
-    client, model = get_client(provider)
+    client, model, _ = get_client(llm_id)
     resp = await client.chat.completions.create(
         model=model,
         messages=messages,
@@ -38,9 +29,9 @@ async def chat(messages: list[dict], provider: str | None = None, temperature: f
     return resp.choices[0].message.content or ""
 
 
-async def chat_stream(messages: list[dict], provider: str | None = None, temperature: float = 0.7):
+async def chat_stream(messages: list[dict], llm_id: str | None = None, temperature: float = 0.7):
     """Streaming chat completion - yields token chunks."""
-    client, model = get_client(provider)
+    client, model, _ = get_client(llm_id)
     stream = await client.chat.completions.create(
         model=model,
         messages=messages,
