@@ -59,7 +59,7 @@ $(async function () {
     [cfg, personas] = await Promise.all([$.get("/api/config"), $.get("/api/personas")]);
   } catch (e) { setMsg("无法连接后端", "error"); return; }
 
-  (cfg.llms || []).forEach(l => $llms.append(llmRow(l)));
+  (cfg.llm_configs || []).forEach(l => $llms.append(llmRow(l)));
   // role overrides for non-moderator (moderator can also pick)
   const allRoles = Object.entries(personas);
   allRoles.forEach(([role, p]) => {
@@ -74,7 +74,7 @@ $(async function () {
   refreshSelectors();
   // apply preserved values
   $roleOv.find("select").each(function () { $(this).val($(this).data("preset") || ""); });
-  $defLlm.val(cfg.default_llm || "");
+  $defLlm.val(cfg.default_llm_id || "");
 
   $("#add-llm").on("click", () => {
     const l = { id: uid(), name: "新 LLM", model: "", base_url: "", api_key: "" };
@@ -91,8 +91,8 @@ $(async function () {
     });
     const patched = {
       ...cfg,
-      llms,
-      default_llm: $defLlm.val(),
+      llm_configs: llms,
+      default_llm_id: $defLlm.val(),
       agents: { ...(cfg.agents || {}), role_llm },
     };
     setMsg("保存中…");

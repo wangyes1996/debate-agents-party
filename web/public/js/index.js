@@ -38,10 +38,10 @@ $(async function () {
 
   // LLM list
   const $llm = $("#llm");
-  (cfg.llms || []).forEach((l) => {
-    $llm.append(`<option value="${l.id}" ${l.id === cfg.default_llm ? "selected" : ""}>${l.name} — ${l.model}</option>`);
+  (cfg.llm_configs || []).forEach((l) => {
+    $llm.append(`<option value="${l.id}" ${l.id === cfg.default_llm_id ? "selected" : ""}>${l.name} — ${l.model}</option>`);
   });
-  if (!(cfg.llms || []).length) {
+  if (!(cfg.llm_configs || []).length) {
     $llm.append(`<option>(无可用 LLM,请先到配置页添加)</option>`);
     $("#start").prop("disabled", true);
     setMsg("尚未配置任何 LLM,请到 /config 添加", "error");
@@ -62,7 +62,7 @@ $(async function () {
     // patch config (we keep llm/role_llm untouched here — config page manages those)
     const patched = {
       ...cfg,
-      default_llm: $("#llm").val(),
+      default_llm_id: $("#llm").val(),
       data_source: { ...(cfg.data_source || {}), primary: $("#source").val(), symbol: $("#symbol").val() },
       agents: { ...(cfg.agents || {}), enabled_roles: roles, max_rounds: parseInt($("#rounds").val(), 10) || 3 },
     };
