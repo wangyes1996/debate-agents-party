@@ -9,19 +9,25 @@
 <body>
 <div class="room-shell">
   <div class="room-head">
-    <div class="topic" id="topic">…</div>
-    <div class="meta" id="meta"></div>
+    <div class="room-head-inner">
+      <div class="topic" id="topic">…</div>
+      <div class="meta" id="meta"></div>
+    </div>
   </div>
-  <div class="status-bar" id="status">连接中…</div>
-  <div class="msgs" id="msgs"></div>
-  <div id="thinking-area"></div>
+  <div class="status-bar"><div class="status-inner" id="status">连接中…</div></div>
+  <div class="msgs" id="msgs"><div class="msgs-inner" id="msgs-inner"></div></div>
+  <div id="thinking-area"><div class="thinking-inner" id="thinking-inner"></div></div>
   <div class="composer">
-    <input type="text" id="input" placeholder="随时插话,所有 agent 会立刻看到并优先回应…" autofocus />
-    <button id="send">发送</button>
-    <button id="back" class="ghost">返回</button>
+    <div class="composer-inner" style="display:flex;gap:8px;width:100%;">
+      <input type="text" id="input" placeholder="随时插话,所有 agent 会立刻看到并优先回应…" autofocus />
+      <button id="send">发送</button>
+      <button id="back" class="ghost">返回</button>
+    </div>
   </div>
 </div>
 <script src="/vendor/jquery.min.js"></script>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/dompurify.min.js"></script>
 <script src="/js/room.js"></script>
 </body>
 </html>
