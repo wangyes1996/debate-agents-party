@@ -150,6 +150,7 @@ def _ensure_v3(data: dict) -> dict:
             a.setdefault("color", "#888")
             a.setdefault("emoji", "💬")
             a.setdefault("system", "")
+            a.setdefault("web_search", True)
         for r in data["rooms"]:
             r.setdefault("max_turns", 16)
             r.setdefault("agent_ids", [])
@@ -219,6 +220,7 @@ def upsert_agent(agent: dict) -> dict:
         agent.setdefault("llm_id", "")
         agent.setdefault("is_moderator", False)
         agent.setdefault("builtin", False)
+        agent.setdefault("web_search", True)
         cfg["agents"].append(agent)
     save_config(cfg)
     return agent

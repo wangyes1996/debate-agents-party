@@ -22,6 +22,7 @@ from typing import Optional
 from .llm import chat_stream
 from .config_store import load_config, get_room, get_agent
 from . import db as db
+from . import web_search as ws
 from ..agents.personas import ANALYST_OBEDIENCE_RULE
 
 
@@ -316,6 +317,35 @@ class DebateEngine:
                 mod_question = m.content
                 break
 
+        # --- 联网搜索阶段(每个 agent 默认开启;agent 可通过 web_search=False 关闭) ---
+        search_block = ""
+        if p.get("web_search", True) is not False and not self.cancelled:
+            try:
+                await self._emit_status(f"🔎 {p['name']} 正在判断是否需要联网搜索...")
+                queries = await ws.decide_queries(
+                    agent_name=p["name"],
+                    agent_system=p.get("system", ""),
+                    topic=self.topic,
+                    moderator_question=mod_question,
+                    transcript_tail=transcript,
+                    llm_id=p.get("llm_id") or None,
+                )
+                if queries:
+                    await self.queue.put({
+                        "type": "search",
+                        "data": {"role": role_id, "name": p["name"], "emoji": p["emoji"],
+                                 "color": p["color"], "queries": queries, "ts": time.time()},
+                    })
+                    await self._emit_status(f"🌐 {p['name']} 联网搜索:{' / '.join(queries)}")
+                    results = {}
+                    for q in queries:
+                        results[q] = await ws.search(q, max_results=4)
+                    search_block = ws.format_results_for_prompt(results)
+            except Exception as e:
+                # 搜索失败不应阻塞辩论
+                await self._emit_status(f"(联网搜索失败,跳过:{e})")
+                search_block = ""
+
         user_prompt = (
             f"辩论议题:**{self.topic}**\n\n"
             f"【在场队友】{self._roster_zh()}\n"
@@ -324,7 +354,7 @@ class DebateEngine:
             f"🎤【主持人刚刚的提问 — 你必须直接回答】\n{mod_question or '(请就你的角色给出观点)'}\n\n"
             f"现在轮到你({p['name']})发言。开场第一句话就直接切入主持人的问题。"
         )
-        system = (p.get("system") or "") + ANALYST_OBEDIENCE_RULE
+        system = (p.get("system") or "") + ANALYST_OBEDIENCE_RULE + search_block
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},

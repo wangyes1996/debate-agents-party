@@ -78,6 +78,7 @@ class AgentBody(BaseModel):
     system: str = ""
     llm_id: str = ""
     is_moderator: bool = False
+    web_search: bool = True
 
 
 @app.post("/api/agents")

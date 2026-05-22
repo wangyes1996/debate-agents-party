@@ -146,9 +146,21 @@ $(async function () {
     // when viewing an old session (read-only), suppress live render
     if (typeof viewingSessionId !== "undefined" && viewingSessionId !== null) {
       if (t === "stream_start" || t === "stream_chunk" || t === "stream_end"
-          || t === "message" || t === "thinking") return;
+          || t === "message" || t === "thinking" || t === "search") return;
     }
     if (t === "status") $status.text(d.text || "");
+    else if (t === "search") {
+      // small chip in the timeline showing what the agent is searching
+      const qs = (d.queries || []).map(q => `<span class="search-q">${$("<div>").text(q).html()}</span>`).join("");
+      const $chip = $(`
+        <div class="search-chip" style="border-left:3px solid ${d.color}">
+          <span class="search-head"><span>${d.emoji}</span> <strong style="color:${d.color}">${$("<div>").text(d.name).html()}</strong> 🌐 联网搜索中…</span>
+          <div class="search-queries">${qs}</div>
+        </div>
+      `);
+      $("#feed").append($chip);
+      maybeScrollBottom();
+    }
     else if (t === "thinking") { if (d.on) showThinking(d); else clearThinking(d.role); }
     else if (t === "stream_start") {
       clearThinking(d.role);

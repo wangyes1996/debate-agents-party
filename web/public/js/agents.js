@@ -26,6 +26,7 @@ $(async function () {
                 <span style="font-size:22px">${a.emoji}</span>
                 <strong style="color:${a.color}">${esc(a.name)}</strong>
                 ${a.is_moderator ? '<span class="tag" style="border-color:#d29922; color:#d29922">主持人</span>' : ""}
+                ${a.web_search !== false ? '<span class="tag" style="border-color:#3fb950; color:#3fb950" title="发言前会联网搜索">🌐 联网</span>' : '<span class="tag muted" title="不联网">🚫 离线</span>'}
                 ${a.builtin ? '<span class="tag">预设</span>' : ""}
                 <span class="tag">LLM: ${esc(llmName)}</span>
               </div>
@@ -57,6 +58,7 @@ $(async function () {
     $("#m-emoji").val(a ? a.emoji : "💬");
     $("#m-color").val(a ? a.color : "#7c3aed");
     $("#m-moderator").prop("checked", a ? !!a.is_moderator : false);
+    $("#m-websearch").prop("checked", a ? (a.web_search !== false) : true);
     $("#m-system").val(a ? a.system : "");
     $("#m-msg").text("");
 
@@ -79,6 +81,7 @@ $(async function () {
       color: $("#m-color").val().trim() || "#888",
       llm_id: $("#m-llm").val() || "",
       is_moderator: $("#m-moderator").is(":checked"),
+      web_search: $("#m-websearch").is(":checked"),
       system: $("#m-system").val(),
     };
     if (!body.name) return $("#m-msg").addClass("error").text("请填名称");
