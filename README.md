@@ -19,6 +19,9 @@
 - 🎤 **主持人驱动** —— 用 `[NEXT: role]` / `[END]` token 调度发言、自然终结
 - 🌊 **端到端流式输出** —— WebSocket，markdown 边收边渲染
 - 🙋 **用户插话** —— 任何时候都能打字，主持人下一轮回应
+- 💾 **历史持久化** —— SQLite 自动落库，刷新页面/重启服务不丢消息
+- 🔄 **断线重连 / Resume** —— 辩论跑在后端后台任务里，关闭页面不打断；重新打开自动续上
+- ♻️ **一键重启辩论** —— 同一房间可微调议题再开一轮，旧 history 可选保留或清空
 - 🔌 **多 LLM** —— 任何 OpenAI 兼容接口（OpenAI / DeepSeek / 火山方舟 / OpenRouter / 本地 llama.cpp ...），不同 agent 可以用不同 LLM
 
 ### 10 个预设 agent（可编辑/删除/增补）
@@ -56,15 +59,20 @@
 │  FastAPI 后端（端口 8000）                          │
 │  ├─ /api/agents     CRUD                            │
 │  ├─ /api/rooms      CRUD                            │
+│  ├─ /api/rooms/{id}/history   读取该房间最近 session│
 │  ├─ /api/config     LLM 配置                        │
-│  ├─ /ws/debate      WebSocket —— 一连接一场辩论    │
+│  ├─ /ws/debate      WebSocket —— 订阅房间广播       │
 │  └─ DebateEngine    主持人驱动的编排器              │
-│         └─ 每个 agent 一个 LLM 客户端（OpenAI 兼容）│
-└─────────────────────────────────────────────────────┘
-           │
-           ▼
-    config.json   ← 唯一数据源
-    （llm_configs[]、agents[]、rooms[]、schema_version: 3）
+│       ├─ 每个 agent 一个 LLM 客户端（OpenAI 兼容）  │
+│       └─ 每房间一个 engine 实例，跑在后台 asyncio   │
+└─────────────────┬───────────────────────────────────┘
+                  │
+       ┌──────────┴──────────┐
+       ▼                     ▼
+  config.json           data/debate.db
+  agents / rooms /      辩论 history（SQLite,
+  llm_configs           WAL，首次运行自动创建）
+  （schema_version: 3）
 ```
 
 **为什么这么轻量**：没有 Next.js、没有 React、没有构建步骤。前端就是 4 个静态 HTML + 一个迷你 Express 转发 `/api/*` 并发静态文件。UI 上能做的事，curl 也能做。
@@ -74,6 +82,7 @@
 - `agents[]` —— `{id, name, emoji, color, system, llm_id, is_moderator}`
 - `rooms[]` —— `{id, name, topic, moderator_id, agent_ids[], max_turns}`
 - `default_llm_id` —— 当 agent 的 `llm_id` 为空时使用
+- `debate_sessions` / `debate_messages` —— SQLite 双表，记录每场辩论的元信息和逐条消息（不进 config.json）
 
 ---
 
@@ -152,6 +161,14 @@ cd web && node server.js
 
 浏览器打开 **http://localhost:3000**，点示例房间体验，或点"+ 新建辩论室"开你自己的。
 
+### 💾 持久化与数据目录
+
+- 辩论 history 落在 `data/debate.db`（SQLite，WAL 模式），**首次创建 session 时自动建立**，新克隆零配置即可启动。
+- `config.json` 只存 agents / rooms / LLM 配置，**不写入辩论内容**，方便手动编辑或版本管理。
+- 改路径：`DEBATE_DB_PATH=/var/lib/debate/debate.db uvicorn backend.main:app ...`
+- 清空所有 history：直接删 `data/`，下次写入自动重建。
+- 重启后端不影响已落库的历史；进入房间会自动读取最近一场 session 的消息渲染出来。
+
 ### Docker（可选）
 
 ```bash
@@ -205,11 +222,14 @@ docker compose up --build
 | GET | `/api/rooms/{id}` | — | 房间详情 |
 | POST | `/api/rooms` | `RoomBody` | 新建的房间 |
 | PUT | `/api/rooms/{id}` | `RoomBody` | 更新后的房间 |
-| DELETE | `/api/rooms/{id}` | — | `{ok:true}` |
-| WS | `/ws/debate` | 客户端发 `{type:"start", room_id}` | 服务端推 `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
+| DELETE | `/api/rooms/{id}` | — | `{ok:true}`（级联删除该房间所有 session/history） |
+| GET | `/api/rooms/{id}/history` | — | 最近一场 session 的元信息 + 全部消息（用于 resume） |
+| DELETE | `/api/rooms/{id}/history` | — | 清空该房间所有 session/history |
+| WS | `/ws/debate` | 客户端发 `{type:"start" \| "restart", room_id, ...}` | 服务端推 `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
 
 WebSocket 客户端消息：
-- `{type:"start", room_id}` —— 启动指定房间的一场辩论
+- `{type:"start", room_id}` —— 启动指定房间的一场辩论（若已在跑，attach 到现有 engine）
+- `{type:"restart", room_id, topic?, clear_history?}` —— 取消当前 engine，可选更新议题、可选清空 history，再开一轮
 - `{type:"user_message", text}` —— 插话，下一轮处理
 - `{type:"cancel"}` —— 中止当前辩论
 - `{type:"ping"}` —— 心跳
@@ -221,16 +241,19 @@ WebSocket 客户端消息：
 ```
 debate-agents-party/
 ├── backend/
-│   ├── main.py                  FastAPI 入口 + WS 处理
+│   ├── main.py                  FastAPI 入口 + WS 处理 + engine registry
 │   ├── core/
 │   │   ├── config_store.py      JSON 存储、schema 迁移、CRUD 工具
-│   │   ├── debate_engine.py     主持人驱动的编排器
+│   │   ├── db.py                SQLite 持久层（lazy init, WAL, env 覆盖）
+│   │   ├── debate_engine.py     主持人驱动的编排器（per-room 后台任务）
 │   │   └── llm.py               OpenAI 兼容流式客户端
 │   ├── agents/
 │   │   └── personas.py          10 个种子 agent + 主持人 system prompt
 │   └── requirements.txt
-├── config.json                  ← 你的数据都在这（git 忽略）
+├── config.json                  ← agents / rooms / LLM 配置（git 忽略）
 ├── config.example.json          ← 模板文件，已提交
+├── data/                        ← SQLite 数据目录（git 忽略，首跑自动建）
+│   └── debate.db                辩论 sessions + messages
 ├── web/
 │   ├── server.js                Express 静态服务 + /api 代理
 │   └── public/
@@ -255,6 +278,9 @@ debate-agents-party/
 
 ## 🗺️ Roadmap
 
+- [x] 历史持久化（SQLite）+ 刷新/重启自动 resume
+- [x] 一键 restart，可选保留或清空 history
+- [ ] Session 历史列表 UI（每个房间可查看/切换历次辩论）
 - [ ] 导出辩论记录为 Markdown / 分享链接
 - [ ] 房间级模型覆盖（按场切换 LLM，而不是按 agent）
 - [ ] 分支辩论（从任意消息分叉）

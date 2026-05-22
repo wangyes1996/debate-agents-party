@@ -19,6 +19,9 @@ Spin up a debate room around **any topic** (philosophy, product decisions, ethic
 - 🎤 **Moderator-driven** — uses `[NEXT: role]` / `[END]` tokens to schedule speakers and end naturally
 - 🌊 **Token streaming end-to-end** — WebSocket, markdown rendered live
 - 🙋 **User interjection** — type anytime, moderator routes the response on the next turn
+- 💾 **Persistent history** — SQLite-backed, survives page refresh and backend restart
+- 🔄 **Auto-resume** — debate runs as a backend background task; close the tab, come back later, history rehydrates
+- ♻️ **One-click restart** — same room, tweak the topic, rerun; optionally keep or wipe prior history
 - 🔌 **Multi-LLM** — any OpenAI-compatible endpoint (OpenAI, DeepSeek, Volcengine Ark, OpenRouter, local llama.cpp, ...). Different agents can use different LLMs.
 
 ### 10 preset agents (fully editable)
@@ -56,15 +59,20 @@ These are *seeds* — once loaded they're rows in your config. Rename them, rewr
 │  FastAPI backend (:8000)                            │
 │  ├─ /api/agents     CRUD                            │
 │  ├─ /api/rooms      CRUD                            │
+│  ├─ /api/rooms/{id}/history   latest session + msgs │
 │  ├─ /api/config     LLM configs                     │
-│  ├─ /ws/debate      WebSocket — one conn = 1 debate │
+│  ├─ /ws/debate      WebSocket — subscribes to room  │
 │  └─ DebateEngine    moderator-driven orchestration  │
-│         └─ per-agent LLM client (OpenAI-compatible) │
-└─────────────────────────────────────────────────────┘
-           │
-           ▼
-    config.json   ← single source of truth
-    (llm_configs[], agents[], rooms[], schema_version: 3)
+│       ├─ per-agent LLM client (OpenAI-compatible)   │
+│       └─ one engine per room, runs as bg asyncio    │
+└─────────────────┬───────────────────────────────────┘
+                  │
+       ┌──────────┴──────────┐
+       ▼                     ▼
+  config.json           data/debate.db
+  agents / rooms /      debate history (SQLite,
+  llm_configs           WAL, created on first write)
+  (schema_version: 3)
 ```
 
 **Why it's small:** no Next.js, no React, no build step. The frontend is four static HTML files and a tiny Express server that proxies `/api/*` and serves static assets. Everything you can see in the UI is also a REST call you could `curl` directly.
@@ -74,6 +82,7 @@ These are *seeds* — once loaded they're rows in your config. Rename them, rewr
 - `agents[]` — `{id, name, emoji, color, system, llm_id, is_moderator}`
 - `rooms[]` — `{id, name, topic, moderator_id, agent_ids[], max_turns}`
 - `default_llm_id` — fallback when an agent's `llm_id` is empty
+- `debate_sessions` / `debate_messages` — SQLite tables for per-room debate history (kept out of `config.json`)
 
 ---
 
@@ -141,6 +150,14 @@ cd web && node server.js
 
 Open **http://localhost:3000** and click the sample room, or hit "+ New room" to create your own.
 
+### 💾 Persistence & data directory
+
+- Debate history is stored in `data/debate.db` (SQLite, WAL). The DB and `data/` directory are **created lazily on first write** — zero-config for a fresh clone.
+- `config.json` only holds agents / rooms / LLM configs. Debate transcripts are kept out of it, so the file stays small and easy to hand-edit or version.
+- Override path: `DEBATE_DB_PATH=/var/lib/debate/debate.db uvicorn backend.main:app ...`
+- Wipe all history: just `rm -rf data/` — it will be recreated on the next debate.
+- Restarting the backend doesn't affect saved history; reopening a room auto-loads the latest session.
+
 ### Docker (optional)
 
 ```bash
@@ -194,11 +211,14 @@ All endpoints are unauthenticated, JSON-only.
 | GET | `/api/rooms/{id}` | — | room |
 | POST | `/api/rooms` | `RoomBody` | created room |
 | PUT | `/api/rooms/{id}` | `RoomBody` | updated room |
-| DELETE | `/api/rooms/{id}` | — | `{ok:true}` |
-| WS | `/ws/debate` | client → `{type:"start", room_id}` | server streams `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
+| DELETE | `/api/rooms/{id}` | — | `{ok:true}` (cascades: deletes all sessions/history for the room) |
+| GET | `/api/rooms/{id}/history` | — | latest session metadata + all messages (used for resume) |
+| DELETE | `/api/rooms/{id}/history` | — | wipe all sessions/history for the room |
+| WS | `/ws/debate` | client → `{type:"start" \| "restart", room_id, ...}` | server streams `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
 
 WebSocket client messages:
-- `{type:"start", room_id}` — kick off a debate for the given room
+- `{type:"start", room_id}` — kick off (or attach to) a debate for the given room
+- `{type:"restart", room_id, topic?, clear_history?}` — cancel the current engine, optionally update the topic, optionally wipe history, then run again
 - `{type:"user_message", text}` — interjection, queued for the next round
 - `{type:"cancel"}` — stop the current debate
 - `{type:"ping"}` — heartbeat
@@ -210,16 +230,19 @@ WebSocket client messages:
 ```
 debate-agents-party/
 ├── backend/
-│   ├── main.py                  FastAPI app + WS handler
+│   ├── main.py                  FastAPI app + WS handler + engine registry
 │   ├── core/
 │   │   ├── config_store.py      JSON store, schema migrations, CRUD helpers
-│   │   ├── debate_engine.py     moderator-driven orchestrator
+│   │   ├── db.py                SQLite layer (lazy init, WAL, env override)
+│   │   ├── debate_engine.py     moderator-driven orchestrator (per-room bg task)
 │   │   └── llm.py               OpenAI-compatible streaming client
 │   ├── agents/
 │   │   └── personas.py          10 seed agent presets + MODERATOR_SYSTEM
 │   └── requirements.txt
-├── config.json                  ← your data lives here (git-ignored)
+├── config.json                  ← agents / rooms / LLM configs (git-ignored)
 ├── config.example.json          ← template, committed
+├── data/                        ← SQLite data dir (git-ignored, auto-created)
+│   └── debate.db                debate sessions + messages
 ├── web/
 │   ├── server.js                tiny Express static + /api proxy
 │   └── public/
@@ -244,6 +267,9 @@ debate-agents-party/
 
 ## 🗺️ Roadmap
 
+- [x] Persistent debate history (SQLite) + auto-resume on refresh/restart
+- [x] One-click restart, keep or wipe prior history
+- [ ] Session history list UI (browse/switch past debates per room)
 - [ ] Export a debate transcript as Markdown / share link
 - [ ] Per-room model overrides (swap LLM per-debate, not per-agent)
 - [ ] Branching debates (fork from any message)
