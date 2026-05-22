@@ -97,12 +97,21 @@ def _parse_bing(html: str, max_results: int) -> list[dict]:
 
 
 async def _bing_search(query: str, max_results: int = 4) -> list[dict]:
-    """Hit Bing HTML and parse results. Returns [] on any failure."""
-    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={max(max_results, 10)}"
+    """Hit Bing HTML and parse results. Returns [] on any failure.
+
+    Force `mkt=en-US&setlang=en-US&cc=US` — without this Bing routes by
+    server IP and returns garbage (Indian doctor pages, Spanish LinkedIn
+    profiles) for short Chinese/news queries.
+    """
+    url = (
+        f"https://www.bing.com/search?q={quote_plus(query)}"
+        f"&count={max(max_results, 10)}"
+        f"&setmkt=en-US&setlang=en-US&cc=US&mkt=en-US"
+    )
     headers = {
         "User-Agent": _UA,
         "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
     }
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
@@ -114,8 +123,113 @@ async def _bing_search(query: str, max_results: int = 4) -> list[dict]:
         return [{"_error": f"{type(e).__name__}: {str(e)[:120]}"}]
 
 
+# DuckDuckGo html result link: <a class="result__a" href="URL">TITLE</a>
+_DDG_LINK_RE = re.compile(
+    r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+    re.DOTALL,
+)
+_DDG_SNIPPET_RE = re.compile(
+    r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
+    re.DOTALL,
+)
+
+
+async def _ddg_search(query: str, max_results: int = 4) -> list[dict]:
+    """DuckDuckGo HTML POST endpoint. Used as fallback when Bing is dry.
+
+    Tends to be more permissive on news/political queries but rate-limits
+    aggressively (returns 202 on repeat). Best for English queries.
+    """
+    url = "https://html.duckduckgo.com/html/"
+    headers = {
+        "User-Agent": _UA,
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://html.duckduckgo.com",
+        "Referer": "https://html.duckduckgo.com/",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            r = await c.post(url, headers=headers, data={"q": query})
+        if r.status_code != 200:
+            return [{"_error": f"ddg http {r.status_code}"}]
+        links = _DDG_LINK_RE.findall(r.text)
+        snippets = _DDG_SNIPPET_RE.findall(r.text)
+        out: list[dict] = []
+        for i, (href, title) in enumerate(links[:max_results]):
+            # DDG wraps in //duckduckgo.com/l/?uddg=<url-encoded>
+            href = _html.unescape(href)
+            if "uddg=" in href:
+                m = re.search(r"uddg=([^&]+)", href)
+                if m:
+                    href = unquote(m.group(1))
+            if href.startswith("//"):
+                href = "https:" + href
+            body = _strip_tags(snippets[i]) if i < len(snippets) else ""
+            out.append({"title": _strip_tags(title), "href": href, "body": body})
+        return out
+    except Exception as e:
+        return [{"_error": f"{type(e).__name__}: {str(e)[:120]}"}]
+
+
+# Hosts that are almost always noise for news/current-event queries
+# (reference encyclopedias, navigation/landing pages, generic outlet hubs).
+# Per-domain blacklist — keeps deep article URLs from these sites but kills
+# bare landing pages.
+_NOISE_LANDING_RE = re.compile(
+    r"^https?://(www\.|edition\.|en\.)?("
+    r"wikipedia\.org/wiki/(China|United_States|United_States_of_America|Donald_Trump|Xi_Jinping)$"
+    r"|britannica\.com/(place|topic)/[^/]+/?$"
+    r"|chinadaily\.com\.cn/?$"
+    r"|chinadaily\.com\.cn/(china|world|business)/?$"
+    r"|cnn\.com/(world/china|us|world)/?$"
+    r"|bbc\.com/news(/world(/asia(/china)?)?)?/?$"
+    r"|reuters\.com/(world(/china)?|business|markets)/?$"
+    r"|apnews\.com/(us-news|world-news|hub/.*)?$"
+    r"|scmp\.com/news/china/?$"
+    r"|ft\.com/[a-z-]+/?$"
+    r"|bloomberg\.com/[a-z-]*/?$"
+    r"|politico\.com/?$"
+    r"|cbsnews\.com/?$"
+    r"|nytimes\.com/?$"
+    r"|whitehouse\.gov/?$"
+    r"|usa\.gov/?$"
+    r"|usagov(\.gov)?/?$"
+    r"|state\.gov/?$"
+    r"|usatoday\.com/?$"
+    r"|usnews\.com/?$"
+    r"|google\.[a-z.]+/?$"
+    r"|support\.google\.com.*"
+    r"|outlook\.com/?$"
+    r"|sendersupport\.olc\.protection\.outlook\.com.*"
+    r"|microsoft\.com/.*"
+    r"|linkedin\.com/pub/dir/.*"
+    r"|prezi\.com/.*"
+    r"|1library\.co/.*"
+    r"|corporationwiki\.com/.*"
+    r"|ustraveldocs\.com/?$"
+    r"|justdial\.com.*"
+    r"|apollo247\.com.*"
+    r"|worldatlas\.com/.*"
+    r"|ontheworldmap\.com/.*"
+    r"|maps\.google\.[a-z.]+/.*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_noise(href: str) -> bool:
+    if not href:
+        return True
+    if _NOISE_LANDING_RE.match(href):
+        return True
+    return False
+
+
 async def search(query: str, max_results: int = 4) -> list[dict]:
-    """Cached text search. Returns list of {title, href, body}."""
+    """Cached text search. Returns list of {title, href, body}.
+
+    Pipeline: Bing (primary) → noise filter → DDG fallback if dry.
+    """
     query = (query or "").strip()
     if not query:
         return []
@@ -124,12 +238,29 @@ async def search(query: str, max_results: int = 4) -> list[dict]:
     hit = _CACHE.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
         return hit[1]
-    results = await _bing_search(query, max_results=max_results)
-    # Cache only clean results; still return errors once for diagnosis
-    clean = [r for r in results if "_error" not in r]
+
+    # Primary: Bing en-US
+    bing = await _bing_search(query, max_results=max_results * 2)
+    clean = [r for r in bing if "_error" not in r and not _is_noise(r.get("href", ""))]
+
+    # Fallback to DDG if Bing returned nothing useful
+    if len(clean) < 2:
+        ddg = await _ddg_search(query, max_results=max_results * 2)
+        ddg_clean = [r for r in ddg if "_error" not in r and not _is_noise(r.get("href", ""))]
+        # Merge dedup by href
+        seen = {r["href"] for r in clean}
+        for r in ddg_clean:
+            if r["href"] not in seen:
+                clean.append(r)
+                seen.add(r["href"])
+
+    clean = clean[:max_results]
     if clean:
         _CACHE[key] = (now, clean)
-    return results
+        return clean
+    # Surface errors so the agent (and our logs) can see what happened
+    errs = [r for r in (bing or []) if "_error" in r]
+    return errs or []
 
 
 _JSON_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
@@ -152,18 +283,22 @@ async def decide_queries(
         f"辩论议题:{topic}\n"
         f"主持人刚刚的问题:{moderator_question or '(暂无具体问题)'}\n\n"
         f"【最近发言节选】\n{transcript_tail[-1200:]}\n\n"
-        f"在发言之前,你可以选择联网搜索 0-2 条简短查询(英文或中文皆可),用来:\n"
-        f"- 核实事实/数据/最新事件\n"
-        f"- 找具体案例或权威观点支撑你的角色立场\n\n"
+        f"在发言之前,你可以选择联网搜索 0-2 条 query 用来核实事实/数据/最新事件。\n\n"
+        f"⚠️ **query 必须用英文**(搜索引擎走 en-US 区域,中文 query 会被路由到错误国家返回垃圾)。\n"
+        f"⚠️ **query 必须具体、有信息量**:\n"
+        f"  ✅ 好:`US China semiconductor sanctions May 2026`、`Trump China tariff announcement 2026`\n"
+        f"  ✅ 好:`Bitcoin price USD today site:coinmarketcap.com`\n"
+        f"  ❌ 烂:`China US relations`、`中美关系`、`Bitcoin price`(太宽泛,只能拿到 Wikipedia/官网首页)\n"
+        f"  规则:加年份/月份、加事件关键词、必要时加 `site:` 限定知名媒体(reuters.com / ft.com / bloomberg.com / nytimes.com / scmp.com / chinadaily.com.cn)。\n\n"
         f"⚠️ 强制规则:\n"
-        f"1. 若问题/议题/最近发言中**任何一处**出现以下意图,必须返回至少 1 条 query:\n"
+        f"1. 若问题/议题/最近发言中出现以下任一意图,必须返回至少 1 条 query:\n"
         f"   - 让你「测试联网」「尝试搜索」「证明能联网」「现场搜一下」\n"
         f"   - 涉及「今天/此刻/最新/实时/当前价格/最近新闻/2025/2026」等时效性词\n"
         f"   - 涉及具体数字、统计、报告、人物现状、产品发布日期\n"
         f"2. 只有当议题是**纯观点哲学辩论**且无任何时效/事实点时,才能返回空列表。\n\n"
         f"严格只输出一个 JSON 对象,形如:\n"
-        f'{{\"queries\": [\"...\", \"...\"]}}\n'
-        f"queries 最多 2 条,每条 ≤ 10 个词,要具体可检索。不要解释,不要 markdown。"
+        f'{{\"queries\": [\"specific english query 1\", \"specific english query 2\"]}}\n'
+        f"queries 最多 2 条,每条 4-10 个词,英文,具体可检索。不要解释,不要 markdown。"
     )
     try:
         raw = await chat(
