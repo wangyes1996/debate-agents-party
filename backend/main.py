@@ -198,6 +198,9 @@ async def ws_debate(ws: WebSocket):
             elif mtype == "cancel":
                 if engine:
                     engine.cancel()
+            elif mtype == "finalize":
+                if engine:
+                    engine.request_finalize()
             elif mtype == "ping":
                 await ws.send_json({"type": "pong"})
     except WebSocketDisconnect:

@@ -77,6 +77,9 @@ class DebateEngine:
         self.history: list[DebateMessage] = []
         self.pending_user_msgs: list[dict] = []
         self.cancelled = False
+        self.finalize_requested = False
+        self._user_msg_event = asyncio.Event()
+        self.extension_per_user_msg = 4  # 每次用户插话给的额外轮次预算
 
         cfg = load_config()
         room = get_room(cfg, room_id)
@@ -141,11 +144,19 @@ class DebateEngine:
         )
         self.history.append(msg)
         self.pending_user_msgs.append({"id": msg.id, "text": text, "consumed": False})
+        # 用户插话:额外赠送 N 轮预算,让讨论可以继续
+        self.max_turns += self.extension_per_user_msg
+        self._user_msg_event.set()
         asyncio.create_task(self.queue.put({"type": "message", "data": msg.to_dict()}))
         asyncio.create_task(self.queue.put({
             "type": "status",
-            "data": {"text": "⚡ 用户插话已广播,主持人将下一轮安排回应", "ts": time.time()},
+            "data": {"text": f"⚡ 用户插话已广播,辩论延长 {self.extension_per_user_msg} 轮", "ts": time.time()},
         }))
+
+    def request_finalize(self):
+        """用户主动请求结束辩论 → 进入终局总结。"""
+        self.finalize_requested = True
+        self._user_msg_event.set()
 
     # ------------------------------------------------------------------
     # context builders
@@ -340,9 +351,22 @@ class DebateEngine:
             self.turn_count += 1
             kind, next_role = await self._moderator_turn(kickoff=True)
 
-            while not self.cancelled and self.turn_count < self.max_turns:
-                if kind == "end":
+            while not self.cancelled:
+                # 上限/[END] → 进入暂停态等用户决定
+                if self.finalize_requested:
                     break
+                if kind == "end" or self.turn_count >= self.max_turns:
+                    await self._emit_status(
+                        "⏸ 辩论暂停 — 你可以继续插话延长讨论,或点「结束辩论」生成总结"
+                    )
+                    await self.queue.put({"type": "paused", "data": {"turn_count": self.turn_count, "max_turns": self.max_turns}})
+                    self._user_msg_event.clear()
+                    await self._user_msg_event.wait()
+                    if self.cancelled or self.finalize_requested:
+                        break
+                    # 用户插话后继续,重置 kind 让主持人接管
+                    kind = "next"
+
                 valid = set(self._valid_role_ids())
                 if kind != "next" or not next_role or next_role not in valid:
                     next_role = self._valid_role_ids()[0]

@@ -120,6 +120,9 @@ $(async function () {
       renderMsg(d);
     } else if (t === "error") {
       $status.text("错误:" + (d.text || "")); clearThinking();
+    } else if (t === "paused") {
+      $status.text("⏸ 辩论已达上限 — 继续插话延长讨论,或点「结束辩论」生成总结");
+      clearThinking();
     } else if (t === "done") {
       $status.text("辩论结束 ✅"); clearThinking();
     }
@@ -139,4 +142,10 @@ $(async function () {
   const goHome = () => { try { ws.close(); } catch(e){} location.href = "/"; };
   $("#back").on("click", goHome);
   $("#home").on("click", goHome);
+  $("#finalize").on("click", () => {
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "finalize" }));
+      $status.text("正在生成最终总结…");
+    }
+  });
 });
