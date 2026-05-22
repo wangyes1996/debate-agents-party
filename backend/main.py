@@ -1,25 +1,25 @@
-"""FastAPI entry point - REST + WebSocket."""
+"""FastAPI entry point — REST + WebSocket for generic debate platform."""
 from __future__ import annotations
 import asyncio
 import json
-import os
-from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Any
 
-from .core.config_store import load_config, save_config, update_partial
+from .core.config_store import (
+    load_config, update_partial,
+    upsert_agent, delete_agent,
+    upsert_room, delete_room, get_room, get_agent,
+)
 from .core.debate_engine import DebateEngine
-from .api.market import fetch_market, format_market_summary
-from .agents.personas import PERSONAS
 
 app = FastAPI(title="Debate Agents Party")
 
-# CORS - frontend on :3000 talks to backend on :8000
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # dev only - tighten in prod
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,15 +31,7 @@ async def health():
     return {"ok": True}
 
 
-@app.get("/api/personas")
-async def personas():
-    """List all available agent roles for the frontend config UI."""
-    return {
-        k: {"name": v["name"], "emoji": v["emoji"], "color": v["color"]}
-        for k, v in PERSONAS.items()
-        if k != "moderator"
-    }
-
+# --- config (LLMs only; agents/rooms have their own endpoints) ---------------
 
 @app.get("/api/config")
 async def get_config():
@@ -54,14 +46,11 @@ async def get_config():
 class ConfigPatch(BaseModel):
     llm_configs: list | None = None
     default_llm_id: str | None = None
-    agents: dict | None = None
-    data_source: dict | None = None
 
 
 @app.post("/api/config")
 async def set_config(patch: ConfigPatch):
     payload = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
-    # never overwrite api_key with masked placeholder
     if "llm_configs" in payload:
         cur_configs = {c["id"]: c for c in load_config().get("llm_configs", []) if c.get("id")}
         for c in payload["llm_configs"]:
@@ -73,14 +62,91 @@ async def set_config(patch: ConfigPatch):
     return {"ok": True}
 
 
-@app.get("/api/market")
-async def market():
-    cfg = load_config().get("data_source", {})
-    m = await fetch_market(cfg.get("primary", "binance"), cfg.get("symbol", "BTCUSDT"))
-    return {"market": m, "summary": format_market_summary(m)}
+# --- agents CRUD -------------------------------------------------------------
+
+@app.get("/api/agents")
+async def list_agents():
+    return {"agents": load_config().get("agents", [])}
 
 
-# --- WebSocket: one connection = one debate room ---
+class AgentBody(BaseModel):
+    id: str | None = None
+    name: str
+    emoji: str = "💬"
+    color: str = "#888888"
+    system: str = ""
+    llm_id: str = ""
+    is_moderator: bool = False
+
+
+@app.post("/api/agents")
+async def create_agent(body: AgentBody):
+    return upsert_agent(body.model_dump(exclude_none=False))
+
+
+@app.put("/api/agents/{agent_id}")
+async def update_agent(agent_id: str, body: AgentBody):
+    data = body.model_dump(exclude_none=False)
+    data["id"] = agent_id
+    # preserve `builtin` flag
+    cfg = load_config()
+    existing = get_agent(cfg, agent_id)
+    if existing:
+        data["builtin"] = existing.get("builtin", False)
+    return upsert_agent(data)
+
+
+@app.delete("/api/agents/{agent_id}")
+async def remove_agent(agent_id: str):
+    if not delete_agent(agent_id):
+        raise HTTPException(404, "agent not found")
+    return {"ok": True}
+
+
+# --- rooms CRUD --------------------------------------------------------------
+
+@app.get("/api/rooms")
+async def list_rooms():
+    return {"rooms": load_config().get("rooms", [])}
+
+
+@app.get("/api/rooms/{room_id}")
+async def fetch_room(room_id: str):
+    r = get_room(load_config(), room_id)
+    if r is None:
+        raise HTTPException(404, "room not found")
+    return r
+
+
+class RoomBody(BaseModel):
+    id: str | None = None
+    name: str
+    topic: str = ""
+    moderator_id: str
+    agent_ids: list[str] = []
+    max_turns: int = 16
+
+
+@app.post("/api/rooms")
+async def create_room(body: RoomBody):
+    return upsert_room(body.model_dump(exclude_none=False))
+
+
+@app.put("/api/rooms/{room_id}")
+async def update_room(room_id: str, body: RoomBody):
+    data = body.model_dump(exclude_none=False)
+    data["id"] = room_id
+    return upsert_room(data)
+
+
+@app.delete("/api/rooms/{room_id}")
+async def remove_room(room_id: str):
+    if not delete_room(room_id):
+        raise HTTPException(404, "room not found")
+    return {"ok": True}
+
+
+# --- WebSocket: one connection = one debate ---------------------------------
 
 @app.websocket("/ws/debate")
 async def ws_debate(ws: WebSocket):
@@ -90,7 +156,6 @@ async def ws_debate(ws: WebSocket):
     runner_task: asyncio.Task | None = None
 
     async def pump():
-        """Forward queue events to the websocket."""
         while True:
             evt = await queue.get()
             try:
@@ -112,11 +177,19 @@ async def ws_debate(ws: WebSocket):
 
             mtype = msg.get("type")
             if mtype == "start":
-                topic = msg.get("topic", "分析最新的 BTC 行情")
+                room_id = msg.get("room_id")
+                topic_override = msg.get("topic")  # optional override
+                if not room_id:
+                    await ws.send_json({"type": "error", "data": {"text": "缺少 room_id"}})
+                    continue
                 if engine and not engine.cancelled:
                     await ws.send_json({"type": "error", "data": {"text": "已经有一场辩论在进行中"}})
                     continue
-                engine = DebateEngine(topic=topic, queue=queue)
+                try:
+                    engine = DebateEngine(room_id=room_id, queue=queue, topic_override=topic_override)
+                except Exception as e:
+                    await ws.send_json({"type": "error", "data": {"text": str(e)}})
+                    continue
                 runner_task = asyncio.create_task(engine.run())
             elif mtype == "user_message":
                 text = (msg.get("text") or "").strip()
@@ -142,7 +215,6 @@ async def ws_debate(ws: WebSocket):
         pump_task.cancel()
 
 
-# Allow `python -m backend.main`
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)

@@ -154,3 +154,30 @@ button.small { padding: 4px 10px; font-size: 12px; }
 .error { color: var(--red); font-size: 13px; margin-top: 6px; }
 .ok { color: var(--green); font-size: 13px; margin-top: 6px; }
 .muted { color: var(--muted); font-size: 13px; }
+
+/* rooms list */
+.rooms-grid { display: flex; flex-direction: column; gap: 0; }
+.room-card { transition: border-color 0.15s; }
+.room-card:hover { border-color: var(--accent); }
+.room-name { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+.room-topic { font-size: 13px; margin-bottom: 10px; white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
+.room-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.room-meta .tag { font-size: 11px; }
+.room-actions { display: flex; flex-direction: column; gap: 6px; min-width: 90px; }
+
+/* agents list */
+.agents-list { display: flex; flex-direction: column; gap: 0; }
+.agent-card .agent-name { font-size: 15px; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-card .agent-sys { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; max-height: 6em; overflow: hidden; }
+
+/* modal */
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal.hidden { display: none; }
+.modal-box {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; max-width: 720px; width: 100%; max-height: 90vh; overflow-y: auto;
+}
+.modal-box h2 { margin-bottom: 14px; color: var(--text); font-size: 18px; font-weight: 600; }

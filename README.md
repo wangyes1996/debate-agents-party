@@ -1,123 +1,252 @@
-# 🎤 Debate Agents Party
+# 🎙️ Debate Agents Party
 
-> 多智能体加密货币辩论室 — 灵感来自 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents),精简核心思想 + Web 聊天室 UI + 用户实时插话。
+> A general-purpose **multi-agent debate platform** — create rooms, pick a moderator, throw in agents with different worldviews, give them a topic, and watch them argue in real time. Jump in anytime to steer the discussion.
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![next](https://img.shields.io/badge/next.js-15.1.6-black)
+[English](./README.md) · [中文](./README.zh-CN.md)
 
-## ✨ 它做什么
+![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![frontend](https://img.shields.io/badge/frontend-jQuery-yellow) ![license](https://img.shields.io/badge/license-MIT-green)
 
-向"主持人 agent"发起一个议题(默认:**分析最新的 BTC 行情**),主持人召集多个角色 agent 围绕实时市场数据展开辩论:
+---
 
-| 角色 | Emoji | 立场 |
+## ✨ What it does
+
+Spin up a debate room around **any topic** (philosophy, product decisions, ethics, "is coffee better than tea", ...). A **moderator agent** dispatches turns to the participants you picked, every reply streams token-by-token into a chat UI, and you can interject at any moment — the moderator will fold your input into the next round.
+
+- 🧠 **Create your own agents** — name, emoji, color, system prompt, and which LLM they use
+- 🏛️ **Create rooms** — pick a moderator + participants + topic + max turns
+- 🎤 **Moderator-driven** — uses `[NEXT: role]` / `[END]` tokens to schedule speakers and end naturally
+- 🌊 **Token streaming end-to-end** — WebSocket, markdown rendered live
+- 🙋 **User interjection** — type anytime, moderator routes the response on the next turn
+- 🔌 **Multi-LLM** — any OpenAI-compatible endpoint (OpenAI, DeepSeek, Volcengine Ark, OpenRouter, local llama.cpp, ...). Different agents can use different LLMs.
+
+### 10 preset agents (fully editable)
+
+| | Agent | Stance |
 |---|---|---|
-| 多头分析师 | 🐂 | 找看涨理由 |
-| 空头分析师 | 🐻 | 找下行风险 |
-| 技术分析师 | 📊 | 价格/成交量/支撑阻力 |
-| 消息面分析师 | 📰 | 宏观/政策/ETF/巨鲸 |
-| 风险官 | 🛡️ | 永远问"错了能亏多少" |
-| 主持人 | 🎤 | 中立总结 + 最终决议 |
+| 🎤 | **Moderator** | Neutral scheduler, drives the flow |
+| 🧱 | Realist | Resources, constraints, what actually ships |
+| ✨ | Idealist | What *should* be, vision-first |
+| 🔪 | Critic | Pokes holes in every argument |
+| 🌅 | Optimist | Upside, second-order positives |
+| 🌑 | Pessimist | Downside, second-order negatives |
+| 🔍 | Skeptic | "Where's the evidence?" |
+| 🚀 | Innovator | Reframe the question, novel angles |
+| 🛠️ | Pragmatist | Trade-offs, MVP, ship it |
+| ⚖️ | Ethicist | Who is harmed, what's fair |
 
-✅ 看每一轮辩论实时弹气泡(WebSocket 流式推送)
-✅ 你随时在底部输入框插话,主持人会在下一轮采纳
-✅ 最终决议按 **Buy / Hold / Sell + 关键 level** 输出
-✅ Web 端可配置:LLM provider(OpenAI / Anthropic / DeepSeek / 火山方舟)、参与角色、轮次、数据源
+These are *seeds* — once loaded they're rows in your config. Rename them, rewrite their system prompts, add 20 more, delete the ones you don't like.
 
-## 🏗️ 架构
+---
+
+## 🏗️ Architecture
 
 ```
-┌────────────────────────────────────────────────────┐
-│  Next.js 15.1.6 前端 (port 3000)                   │
-│  ├─ /      首页                                    │
-│  ├─ /room  辩论聊天室(WebSocket)                  │
-│  └─ /config  全栈配置                              │
-└──────────────────┬─────────────────────────────────┘
-                   │ HTTP + WS:8000 直连
-┌──────────────────▼─────────────────────────────────┐
-│  FastAPI 后端 (port 8000)                          │
-│  ├─ /ws/debate         WebSocket 辩论流            │
-│  ├─ /api/config        读写配置                    │
-│  ├─ /api/market        Binance/CoinGecko 行情     │
-│  └─ DebateEngine       多 agent 编排              │
-└────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Static frontend (Node/Express on :3000)            │
+│  Plain HTML + jQuery + marked + DOMPurify           │
+│  ├─ /          rooms list + create/edit/delete      │
+│  ├─ /agents    agents CRUD                          │
+│  ├─ /room?id=  live debate (WebSocket client)       │
+│  └─ /config    LLM configurations                   │
+└─────────────────┬───────────────────────────────────┘
+                  │ HTTP proxy /api/*  +  direct WS :8000
+┌─────────────────▼───────────────────────────────────┐
+│  FastAPI backend (:8000)                            │
+│  ├─ /api/agents     CRUD                            │
+│  ├─ /api/rooms      CRUD                            │
+│  ├─ /api/config     LLM configs                     │
+│  ├─ /ws/debate      WebSocket — one conn = 1 debate │
+│  └─ DebateEngine    moderator-driven orchestration  │
+│         └─ per-agent LLM client (OpenAI-compatible) │
+└─────────────────────────────────────────────────────┘
+           │
+           ▼
+    backend/data/config.json   ← single source of truth
+    (llm_configs[], agents[], rooms[], schema_version: 3)
 ```
 
-> **安全说明**:WebSocket 不经 Next.js 代理,浏览器直连 FastAPI。这样完全规避 Next.js 历史 WS 相关 CVE 的攻击面。Next.js 锁定 `15.1.6+`(避开 `<14.2` 和 `15.0.x` 已知问题)。
+**Why it's small:** no Next.js, no React, no build step. The frontend is four static HTML files and a tiny Express server that proxies `/api/*` and serves static assets. Everything you can see in the UI is also a REST call you could `curl` directly.
 
-## 🚀 快速开始
+**Data model:**
+- `llm_configs[]` — `{id, name, model, base_url, api_key}` (OpenAI-compatible)
+- `agents[]` — `{id, name, emoji, color, system, llm_id, is_moderator}`
+- `rooms[]` — `{id, name, topic, moderator_id, agent_ids[], max_turns}`
+- `default_llm_id` — fallback when an agent's `llm_id` is empty
 
-### 方式 1:本地直跑
+---
 
-**后端**
+## 🚀 Quick start
+
+### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- An API key for at least one OpenAI-compatible LLM provider
+
+### 1. Clone & install
+
 ```bash
-cd backend
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python -m backend.main   # 监听 :8000
+git clone https://github.com/<you>/debate-agents-party.git
+cd debate-agents-party
+
+# backend
+python3 -m venv backend/venv
+source backend/venv/bin/activate
+pip install -r backend/requirements.txt
+
+# frontend
+cd web && npm install && cd ..
 ```
 
-**前端**(另开终端)
+### 2. Configure your first LLM
+
+Copy the template first:
+
 ```bash
-cd frontend
-npm install
-npm run dev   # 打开 http://localhost:3000
+cp backend/data/config.example.json backend/data/config.json
 ```
 
-### 方式 2:Docker Compose
+`config.json` is git-ignored — your API keys stay local. You have two options to add credentials:
+
+**Option A — through the UI (recommended):** start the servers (next step), open `http://localhost:3000/config`, click "+ Add LLM", fill in name / model / base URL / API key, save, set it as default.
+
+**Option B — edit JSON directly:** open `backend/data/config.json` and fill in `llm_configs[0]`.
+
+Example for DeepSeek:
+```json
+{
+  "id": "deepseek-chat",
+  "name": "DeepSeek",
+  "model": "deepseek-chat",
+  "base_url": "https://api.deepseek.com/v1",
+  "api_key": "sk-..."
+}
+```
+
+### 3. Run
+
+Two terminals:
 
 ```bash
-docker-compose up --build
-# 前端 http://localhost:3000
+# terminal 1 — backend
+source backend/venv/bin/activate
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-## ⚙️ 首次配置
+```bash
+# terminal 2 — frontend
+cd web && node server.js
+```
 
-1. 打开 http://localhost:3000/config
-2. 选择 LLM Provider(默认 OpenAI),填 API Key
-3. (可选)勾选要参与的 agent 角色 + 轮次
-4. 保存后回到 `/room`,点 **⚔️ 开始辩论**
+Open **http://localhost:3000** and click the sample room, or hit "+ New room" to create your own.
 
-> **提示**:支持任何 OpenAI 兼容端点。火山方舟例子 base_url:`https://ark.cn-beijing.volces.com/api/v3`
+### Docker (optional)
 
-## 🎮 使用流程
+```bash
+docker compose up --build
+```
+Backend on `:8000`, frontend on `:3000`. Mount `backend/data/` to persist your config across rebuilds.
 
-1. 在 `/room` 修改议题(默认"分析最新的 BTC 行情")
-2. 点"开始辩论",主持人开场 + 拉取 Binance 实时行情
-3. 5 个 agent 依次发言,主持人每轮总结
-4. **底部输入框随时插话**,下一轮 agent 们会看到你的发言
-5. 最后一轮结束,主持人给最终决议
+### Exposing to the public internet
 
-## 📂 项目结构
+⚠️ The app has **no authentication**. If you put it on a public IP, anyone who finds it can burn your LLM budget. Recommended:
+- Bind to `127.0.0.1` and use an SSH tunnel: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@host`
+- Or put nginx + basic auth in front
+- Or restrict the cloud firewall to your own IP
+
+---
+
+## 🧭 Typical flow
+
+1. **Configure LLMs** at `/config` — add as many as you want, mark one as default.
+2. **Build your agent roster** at `/agents` — edit the 10 seeds or create new ones. Each agent can use a different LLM (e.g. moderator on a smart model, participants on a cheap fast one).
+3. **Create a room** at `/` — pick the moderator, check the participants, write the topic, set max turns.
+4. **Click into the room** — debate starts immediately, messages stream in. Type in the input box anytime to interject.
+5. The moderator emits `[END]` when the discussion is resolved or hits the turn limit.
+
+---
+
+## 🔧 Customizing agents — the moderator protocol
+
+Participants are free-form (anything you write in the system prompt is up to you). The **moderator** is the one constrained piece: it must emit one of these tokens on its **last line**:
+
+- `[NEXT: <agent_id>]` — pass the mic to that agent (id must be in the room's roster)
+- `[END]` — wrap up; engine then asks the moderator for a final summary and closes the WebSocket
+
+If you write your own moderator agent, copy the system prompt from `backend/agents/personas.py::MODERATOR_SYSTEM` as a base. The engine also injects a small "roundtable obedience" rule into every non-moderator system prompt so participants stay on-topic and respond directly to the moderator's question.
+
+---
+
+## 📡 REST API
+
+All endpoints are unauthenticated, JSON-only.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/config` | — | LLMs + default (api_keys masked) |
+| POST | `/api/config` | `{llm_configs?, default_llm_id?}` | `{ok:true}` |
+| GET | `/api/agents` | — | `{agents:[...]}` |
+| POST | `/api/agents` | `AgentBody` | created agent |
+| PUT | `/api/agents/{id}` | `AgentBody` | updated agent |
+| DELETE | `/api/agents/{id}` | — | `{ok:true}` |
+| GET | `/api/rooms` | — | `{rooms:[...]}` |
+| GET | `/api/rooms/{id}` | — | room |
+| POST | `/api/rooms` | `RoomBody` | created room |
+| PUT | `/api/rooms/{id}` | `RoomBody` | updated room |
+| DELETE | `/api/rooms/{id}` | — | `{ok:true}` |
+| WS | `/ws/debate` | client → `{type:"start", room_id}` | server streams `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
+
+WebSocket client messages:
+- `{type:"start", room_id}` — kick off a debate for the given room
+- `{type:"user_message", text}` — interjection, queued for the next round
+- `{type:"cancel"}` — stop the current debate
+- `{type:"ping"}` — heartbeat
+
+---
+
+## 📁 Project layout
 
 ```
 debate-agents-party/
-├─ backend/
-│  ├─ main.py                # FastAPI 入口
-│  ├─ agents/personas.py     # 角色 prompt
-│  ├─ core/
-│  │  ├─ debate_engine.py    # 多 agent 编排
-│  │  ├─ llm.py              # OpenAI 兼容客户端
-│  │  └─ config_store.py     # 配置持久化
-│  └─ api/market.py          # 行情拉取
-├─ frontend/
-│  └─ src/app/
-│     ├─ page.tsx            # 首页
-│     ├─ room/page.tsx       # 聊天室
-│     └─ config/page.tsx     # 配置页
-└─ docker-compose.yml
+├── backend/
+│   ├── main.py                  FastAPI app + WS handler
+│   ├── core/
+│   │   ├── config_store.py      JSON store, schema migrations, CRUD helpers
+│   │   ├── debate_engine.py     moderator-driven orchestrator
+│   │   └── llm.py               OpenAI-compatible streaming client
+│   ├── agents/
+│   │   └── personas.py          10 seed agent presets + MODERATOR_SYSTEM
+│   ├── data/
+│   │   └── config.json          ← your data lives here
+│   └── requirements.txt
+├── web/
+│   ├── server.js                tiny Express static + /api proxy
+│   └── public/
+│       ├── index.html / agents.html / room.html / config.html
+│       ├── js/                  one .js per page (jQuery)
+│       └── css/app.css
+└── docker-compose.yml
 ```
 
-## 🛣️ 路线图
+---
 
-- [ ] 流式输出(token 级气泡打字机效果)
-- [ ] 历史辩论保存与回看
-- [ ] 更多 agent 角色(链上分析师、衍生品分析师)
-- [ ] 议题模板(BTC / ETH / 板块轮动 / 单只股票)
-- [ ] Agent 之间 1v1 单挑模式
+## 🗺️ Roadmap
 
-## 📝 致敬
+- [ ] Export a debate transcript as Markdown / share link
+- [ ] Per-room model overrides (swap LLM per-debate, not per-agent)
+- [ ] Branching debates (fork from any message)
+- [ ] Optional authentication layer
+- [ ] Memory / RAG hook so agents can cite documents
 
-核心多 agent 辩论思想来自 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)([arxiv: 2412.20138](https://arxiv.org/abs/2412.20138))。本项目精简了原项目的研究图谱(15+ agent → 5 个核心角色),改为 Web 实时交互形态,并新增用户参与辩论的能力。
+---
 
-## 📜 License
+## 🤝 Contributing
 
-MIT
+PRs welcome. The codebase is intentionally small — under ~2k LOC across both halves — so it's easy to read end-to-end before changing anything.
+
+## 📄 License
+
+MIT — see [LICENSE](./LICENSE).
+
+## 🙏 Credits
+
+Inspired by [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents). Streaming UX details borrowed from years of staring at ChatGPT.

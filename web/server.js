@@ -1,7 +1,4 @@
 // Minimal static + thin proxy server for debate-agents-party.
-// Serves /public as the SPA and proxies /api/* to the FastAPI backend.
-// WebSocket goes browser -> :8000 directly (no proxy).
-
 const express = require("express");
 const http = require("http");
 
@@ -11,7 +8,6 @@ const BACKEND = process.env.BACKEND || "http://127.0.0.1:8000";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// Tiny manual proxy for /api/* -> backend (so the browser can use same-origin URLs).
 app.all(/^\/api\/.*/, (req, res) => {
   const url = new URL(BACKEND);
   const opts = {
@@ -34,11 +30,11 @@ app.all(/^\/api\/.*/, (req, res) => {
   upstream.end();
 });
 
-// Static SPA. Serve /public, with HTML pages at /, /room, /config.
 app.use(express.static(__dirname + "/public", { extensions: ["html"] }));
 
 app.get("/", (_, res) => res.sendFile(__dirname + "/public/index.html"));
 app.get("/room", (_, res) => res.sendFile(__dirname + "/public/room.html"));
+app.get("/agents", (_, res) => res.sendFile(__dirname + "/public/agents.html"));
 app.get("/config", (_, res) => res.sendFile(__dirname + "/public/config.html"));
 
 app.listen(PORT, "0.0.0.0", () => {

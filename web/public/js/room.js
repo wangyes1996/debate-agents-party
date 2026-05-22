@@ -1,28 +1,28 @@
-/* room.html — live debate WebSocket client with token-by-token streaming + markdown */
-$(function () {
-  const topic = sessionStorage.getItem("debate_topic") || "BTC 行情";
-  $("#topic").text("议题:" + topic);
+/* room.html — live debate WS client, room_id-driven */
+$(async function () {
+  const params = new URLSearchParams(location.search);
+  const roomId = params.get("id");
+  if (!roomId) { $("#status").text("缺少房间 id,返回首页选择房间"); return; }
 
-  const $msgs = $("#msgs");                 // scroll container (full width)
-  const $msgsInner = $("#msgs-inner");      // centered content
+  let room = null;
+  try { room = await $.get("/api/rooms/" + encodeURIComponent(roomId)); }
+  catch (e) { $("#status").text("房间不存在"); return; }
+
+  $("#topic").text("议题:" + (room.topic || room.name));
+  $("#meta").text(`房间: ${room.name} · 上限 ${room.max_turns} 轮`);
+
+  const $msgs = $("#msgs");
+  const $msgsInner = $("#msgs-inner");
   const $status = $("#status");
   const $thinking = $("#thinking-inner");
 
-  // configure marked: GFM tables, line breaks
-  if (window.marked) {
-    marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
-  }
+  if (window.marked) marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
   function renderMarkdown(text) {
     if (!window.marked || !window.DOMPurify) return null;
-    const html = marked.parse(text || "");
-    return DOMPurify.sanitize(html);
+    return DOMPurify.sanitize(marked.parse(text || ""));
   }
 
-  // streaming buffers: id -> { $node, content }
   const streams = {};
-
-  // --- auto-scroll only when user is already near the bottom ---
-  // If user has scrolled up to read history, DON'T yank them down.
   const NEAR_BOTTOM_PX = 80;
   let stickToBottom = true;
   function recomputeStick() {
@@ -32,19 +32,12 @@ $(function () {
   $msgs.on("scroll", recomputeStick);
   function maybeScrollBottom() {
     if (!stickToBottom) return;
-    const el = $msgs[0];
-    el.scrollTop = el.scrollHeight;
+    const el = $msgs[0]; el.scrollTop = el.scrollHeight;
   }
 
-  function fmtTime(ts) {
-    const d = new Date(ts * 1000);
-    return d.toTimeString().slice(0, 8);
-  }
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
+  function fmtTime(ts) { return new Date(ts*1000).toTimeString().slice(0,8); }
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
-  // Set bubble content. For user msgs use plain text; for agents render markdown.
   function setBubbleContent($content, role, text, opts) {
     const isUser = role === "user";
     if (isUser || !window.marked) {
@@ -54,14 +47,13 @@ $(function () {
       const html = renderMarkdown(text || "");
       $content.html(html != null ? html : escapeHtml(text || ""));
     }
-    if (opts && opts.streaming) {
-      $content.append('<span class="cursor"></span>');
-    }
+    if (opts && opts.streaming) $content.append('<span class="cursor"></span>');
   }
 
   function renderMsg(m, opts) {
+    const cssRole = m.role === "user" ? "user" : (m.role === room.moderator_id ? "moderator" : "");
     const $el = $(`
-      <div class="msg ${m.role}" data-id="${m.id}">
+      <div class="msg ${cssRole}" data-id="${m.id}">
         <div class="avatar" style="border-color:${m.color || "#2a313b"}">${m.emoji || "💬"}</div>
         <div class="body">
           <div class="head">
@@ -82,7 +74,6 @@ $(function () {
     if (!role) $thinking.empty();
     else $thinking.find(`[data-role="${role}"]`).remove();
   }
-
   function showThinking(d) {
     clearThinking(d.role);
     const $t = $(`
@@ -96,14 +87,12 @@ $(function () {
     maybeScrollBottom();
   }
 
-  // WebSocket — connect direct to backend :8000
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-  const wsHost = location.hostname;
-  const ws = new WebSocket(`${wsProto}//${wsHost}:8000/ws/debate`);
+  const ws = new WebSocket(`${wsProto}//${location.hostname}:8000/ws/debate`);
 
   ws.onopen = () => {
     $status.text("已连接,启动辩论…");
-    ws.send(JSON.stringify({ type: "start", topic: topic }));
+    ws.send(JSON.stringify({ type: "start", room_id: roomId }));
   };
   ws.onclose = () => { $status.text("连接已关闭"); clearThinking(); };
   ws.onerror = () => { $status.text("连接错误"); };
@@ -111,17 +100,11 @@ $(function () {
   ws.onmessage = (ev) => {
     const evt = JSON.parse(ev.data);
     const t = evt.type, d = evt.data || {};
-    if (t === "status") {
-      $status.text(d.text || "");
-    } else if (t === "thinking") {
-      if (d.on) showThinking(d);
-      else clearThinking(d.role);
-    } else if (t === "stream_start") {
+    if (t === "status") $status.text(d.text || "");
+    else if (t === "thinking") { if (d.on) showThinking(d); else clearThinking(d.role); }
+    else if (t === "stream_start") {
       clearThinking(d.role);
-      const $el = renderMsg({
-        id: d.id, role: d.role, name: d.name, emoji: d.emoji, color: d.color,
-        round: d.round, ts: d.ts, content: "",
-      }, { streaming: true });
+      const $el = renderMsg({ id: d.id, role: d.role, name: d.name, emoji: d.emoji, color: d.color, round: d.round, ts: d.ts, content: "" }, { streaming: true });
       streams[d.id] = { $content: $el.find(".content"), text: "", role: d.role };
     } else if (t === "stream_chunk") {
       const s = streams[d.id]; if (!s) return;
@@ -133,15 +116,12 @@ $(function () {
       setBubbleContent(s.$content, s.role, d.content || s.text, { streaming: false });
       delete streams[d.id];
     } else if (t === "message") {
-      // server-side echoes for user messages: skip — we already rendered locally.
-      if (d.role === "user") return;
+      if (d.role === "user") return;  // we render locally
       renderMsg(d);
     } else if (t === "error") {
-      $status.text("错误:" + (d.text || ""));
-      clearThinking();
+      $status.text("错误:" + (d.text || "")); clearThinking();
     } else if (t === "done") {
-      $status.text("辩论结束 ✅");
-      clearThinking();
+      $status.text("辩论结束 ✅"); clearThinking();
     }
   };
 
@@ -149,18 +129,12 @@ $(function () {
     const txt = $("#input").val().trim();
     if (!txt) return;
     if (ws.readyState !== 1) { $status.text("未连接,无法发送"); return; }
-    // optimistic local echo (the server-side "user" message will be ignored)
-    renderMsg({
-      id: "u-" + Date.now(), role: "user", name: "你", emoji: "🙋", color: "#58a6ff",
-      content: txt, round: 0, ts: Date.now() / 1000,
-    });
-    // sending is a "user action" → re-stick to bottom
-    stickToBottom = true;
-    maybeScrollBottom();
+    renderMsg({ id: "u-" + Date.now(), role: "user", name: "你", emoji: "🙋", color: "#58a6ff", content: txt, round: 0, ts: Date.now()/1000 });
+    stickToBottom = true; maybeScrollBottom();
     ws.send(JSON.stringify({ type: "user_message", text: txt }));
     $("#input").val("");
   }
   $("#send").on("click", send);
-  $("#input").on("keydown", (e) => { if (e.key === "Enter") send(); });
+  $("#input").on("keydown", e => { if (e.key === "Enter") send(); });
   $("#back").on("click", () => { ws.close(); location.href = "/"; });
 });

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agents · Debate Agents Party</title>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">⚔️ Debate Agents Party</div>
+  <nav>
+    <a href="/">辩论室</a>
+    <a href="/agents" class="active">Agents</a>
+    <a href="/config">LLM 配置</a>
+  </nav>
+</div>
+<div class="container">
+  <div class="card">
+    <h1>Agents 管理 🧠</h1>
+    <p class="muted">每个 agent 有名字、emoji、配色、system prompt,可绑定到某个 LLM(留空则用默认 LLM)。主持人 agent 必须勾选「is_moderator」,系统会用 ta 来调度。</p>
+    <button id="new-agent">+ 新建 Agent</button>
+  </div>
+
+  <div id="agents-list" class="agents-list"></div>
+</div>
+
+<!-- modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <h2 id="modal-title">新建 Agent</h2>
+    <div class="row">
+      <div class="field" style="flex:2"><label>名称</label><input type="text" id="m-name" /></div>
+      <div class="field" style="flex:1"><label>Emoji</label><input type="text" id="m-emoji" value="💬" /></div>
+      <div class="field" style="flex:1"><label>颜色</label><input type="text" id="m-color" value="#888888" /></div>
+    </div>
+    <div class="row">
+      <div class="field" style="flex:2"><label>LLM(留空=默认)</label><select id="m-llm"></select></div>
+      <div class="field" style="flex:1; justify-content:center">
+        <label style="display:flex; align-items:center; gap:8px; margin-top:18px">
+          <input type="checkbox" id="m-moderator" style="width:auto"> is_moderator(主持人)
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <label>System Prompt</label>
+      <textarea id="m-system" style="min-height:180px" placeholder="你是 XX 角色,..."></textarea>
+    </div>
+    <div class="row">
+      <button id="m-save">保存</button>
+      <button id="m-cancel" class="ghost">取消</button>
+      <span id="m-msg" class="muted"></span>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/jquery.min.js"></script>
+<script src="/js/agents.js"></script>
+</body>
+</html>
