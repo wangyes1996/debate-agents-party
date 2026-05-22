@@ -14,6 +14,7 @@ from .core.config_store import (
     upsert_room, delete_room, get_room, get_agent,
 )
 from .core.debate_engine import DebateEngine
+from .core import db as db
 
 app = FastAPI(title="Debate Agents Party")
 
@@ -143,26 +144,105 @@ async def update_room(room_id: str, body: RoomBody):
 async def remove_room(room_id: str):
     if not delete_room(room_id):
         raise HTTPException(404, "room not found")
+    db.delete_sessions_for_room(room_id)
     return {"ok": True}
 
 
-# --- WebSocket: one connection = one debate ---------------------------------
+# --- history / sessions -----------------------------------------------------
+
+@app.get("/api/rooms/{room_id}/history")
+async def room_history(room_id: str):
+    """Return latest session for the room + its messages.
+    Frontend uses this to render past debate on room load (no auto-start)."""
+    r = get_room(load_config(), room_id)
+    if r is None:
+        raise HTTPException(404, "room not found")
+    sess = db.latest_session_for_room(room_id)
+    if sess is None:
+        return {"session": None, "messages": [], "active": False}
+    msgs = db.get_messages(sess["id"])
+    active = room_id in ROOM_ENGINES and not ROOM_ENGINES[room_id].engine.cancelled
+    return {"session": sess, "messages": msgs, "active": active}
+
+
+@app.delete("/api/rooms/{room_id}/history")
+async def clear_room_history(room_id: str):
+    # only allowed if no active engine
+    handle = ROOM_ENGINES.get(room_id)
+    if handle and not handle.engine.cancelled:
+        raise HTTPException(409, "辩论进行中,无法清空历史")
+    db.delete_sessions_for_room(room_id)
+    return {"ok": True}
+
+
+# --- engine registry (one engine per room, many WS subscribers) -------------
+
+class EngineHandle:
+    def __init__(self, engine: DebateEngine, runner_task: asyncio.Task):
+        self.engine = engine
+        self.runner_task = runner_task
+        self.subscribers: set[asyncio.Queue] = set()
+        self.broadcaster_task: asyncio.Task | None = None
+
+
+ROOM_ENGINES: dict[str, EngineHandle] = {}
+
+
+async def _broadcaster(handle: EngineHandle, room_id: str):
+    """Fan out engine.queue events to all subscribed WS queues."""
+    try:
+        while True:
+            evt = await handle.engine.queue.get()
+            dead = []
+            for q in list(handle.subscribers):
+                try:
+                    q.put_nowait(evt)
+                except Exception:
+                    dead.append(q)
+            for q in dead:
+                handle.subscribers.discard(q)
+            if evt.get("type") in ("done", "error"):
+                break
+    finally:
+        # engine finished — drop registration
+        if ROOM_ENGINES.get(room_id) is handle:
+            ROOM_ENGINES.pop(room_id, None)
+
+
+def _start_engine(room_id: str, topic_override: str | None = None,
+                  session_id: str | None = None) -> EngineHandle:
+    queue: asyncio.Queue = asyncio.Queue()
+    engine = DebateEngine(room_id=room_id, queue=queue, topic_override=topic_override,
+                          session_id=session_id)
+    runner = asyncio.create_task(engine.run())
+    handle = EngineHandle(engine, runner)
+    ROOM_ENGINES[room_id] = handle
+    handle.broadcaster_task = asyncio.create_task(_broadcaster(handle, room_id))
+    return handle
+
+
+# --- WebSocket: one connection = one subscriber to a room's engine ----------
 
 @app.websocket("/ws/debate")
 async def ws_debate(ws: WebSocket):
     await ws.accept()
-    queue: asyncio.Queue = asyncio.Queue()
-    engine: DebateEngine | None = None
-    runner_task: asyncio.Task | None = None
+    sub_queue: asyncio.Queue = asyncio.Queue()
+    bound_room: str | None = None
+
+    def _subscribe(room_id: str):
+        nonlocal bound_room
+        if bound_room and bound_room in ROOM_ENGINES:
+            ROOM_ENGINES[bound_room].subscribers.discard(sub_queue)
+        bound_room = room_id
+        if room_id in ROOM_ENGINES:
+            ROOM_ENGINES[room_id].subscribers.add(sub_queue)
 
     async def pump():
         while True:
-            evt = await queue.get()
+            evt = await sub_queue.get()
             try:
                 await ws.send_json(evt)
             except Exception:
-                return
-            if evt.get("type") in ("done", "error"):
                 return
 
     pump_task = asyncio.create_task(pump())
@@ -176,31 +256,99 @@ async def ws_debate(ws: WebSocket):
                 continue
 
             mtype = msg.get("type")
-            if mtype == "start":
-                room_id = msg.get("room_id")
-                topic_override = msg.get("topic")  # optional override
+            room_id = msg.get("room_id") or bound_room
+
+            if mtype == "attach":
+                # passive: just subscribe to existing engine if any (for resume after refresh)
                 if not room_id:
                     await ws.send_json({"type": "error", "data": {"text": "缺少 room_id"}})
                     continue
-                if engine and not engine.cancelled:
-                    await ws.send_json({"type": "error", "data": {"text": "已经有一场辩论在进行中"}})
+                _subscribe(room_id)
+                handle = ROOM_ENGINES.get(room_id)
+                await ws.send_json({
+                    "type": "attached",
+                    "data": {
+                        "room_id": room_id,
+                        "active": bool(handle and not handle.engine.cancelled),
+                        "session_id": handle.engine.session_id if handle else None,
+                    },
+                })
+
+            elif mtype == "start":
+                # start NEW debate (new session)
+                if not room_id:
+                    await ws.send_json({"type": "error", "data": {"text": "缺少 room_id"}})
+                    continue
+                existing = ROOM_ENGINES.get(room_id)
+                if existing and not existing.engine.cancelled:
+                    # already running — just subscribe (resume view)
+                    _subscribe(room_id)
+                    await ws.send_json({
+                        "type": "attached",
+                        "data": {"room_id": room_id, "active": True,
+                                 "session_id": existing.engine.session_id},
+                    })
                     continue
                 try:
-                    engine = DebateEngine(room_id=room_id, queue=queue, topic_override=topic_override)
+                    handle = _start_engine(room_id, topic_override=msg.get("topic"))
                 except Exception as e:
                     await ws.send_json({"type": "error", "data": {"text": str(e)}})
                     continue
-                runner_task = asyncio.create_task(engine.run())
+                _subscribe(room_id)
+                await ws.send_json({
+                    "type": "started",
+                    "data": {"room_id": room_id, "session_id": handle.engine.session_id},
+                })
+
+            elif mtype == "restart":
+                # cancel old engine, optionally update topic, start fresh session
+                if not room_id:
+                    await ws.send_json({"type": "error", "data": {"text": "缺少 room_id"}})
+                    continue
+                new_topic = (msg.get("topic") or "").strip() or None
+                old = ROOM_ENGINES.get(room_id)
+                if old and not old.engine.cancelled:
+                    old.engine.cancel()
+                    try:
+                        await asyncio.wait_for(old.runner_task, timeout=2.0)
+                    except Exception:
+                        pass
+                # also clear prior history if requested
+                if msg.get("clear_history"):
+                    db.delete_sessions_for_room(room_id)
+                # update room.topic if provided so future loads pick it up
+                if new_topic:
+                    r = get_room(load_config(), room_id)
+                    if r:
+                        r["topic"] = new_topic
+                        upsert_room(r)
+                try:
+                    handle = _start_engine(room_id, topic_override=new_topic)
+                except Exception as e:
+                    await ws.send_json({"type": "error", "data": {"text": str(e)}})
+                    continue
+                _subscribe(room_id)
+                await ws.send_json({
+                    "type": "restarted",
+                    "data": {"room_id": room_id, "session_id": handle.engine.session_id},
+                })
+
             elif mtype == "user_message":
                 text = (msg.get("text") or "").strip()
-                if engine and text:
-                    engine.add_user_message(text)
+                handle = ROOM_ENGINES.get(bound_room or "")
+                if handle and text:
+                    handle.engine.add_user_message(text)
+
             elif mtype == "cancel":
-                if engine:
-                    engine.cancel()
+                handle = ROOM_ENGINES.get(bound_room or "")
+                if handle:
+                    handle.engine.cancel()
+
             elif mtype == "finalize":
-                if engine:
-                    engine.request_finalize()
+                handle = ROOM_ENGINES.get(bound_room or "")
+                if handle:
+                    handle.engine.request_finalize()
+
             elif mtype == "ping":
                 await ws.send_json({"type": "pong"})
     except WebSocketDisconnect:
@@ -211,10 +359,9 @@ async def ws_debate(ws: WebSocket):
         except Exception:
             pass
     finally:
-        if engine:
-            engine.cancel()
-        if runner_task and not runner_task.done():
-            runner_task.cancel()
+        # detach subscriber, but engine keeps running for other viewers / next refresh
+        if bound_room and bound_room in ROOM_ENGINES:
+            ROOM_ENGINES[bound_room].subscribers.discard(sub_queue)
         pump_task.cancel()
 
 

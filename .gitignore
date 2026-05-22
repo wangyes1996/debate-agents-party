@@ -9,3 +9,8 @@ backend/**/__pycache__/
 /config.json
 /config.json.bak
 /*.bak
+
+# Local SQLite debate history (auto-created on first run)
+/data/*.db
+/data/*.db-wal
+/data/*.db-shm

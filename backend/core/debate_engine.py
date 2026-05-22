@@ -21,6 +21,7 @@ from typing import Optional
 
 from .llm import chat_stream
 from .config_store import load_config, get_room, get_agent
+from . import db as db
 from ..agents.personas import ANALYST_OBEDIENCE_RULE
 
 
@@ -72,7 +73,8 @@ def _strip_directive(text: str) -> str:
 class DebateEngine:
     """One instance per active debate room."""
 
-    def __init__(self, room_id: str, queue: asyncio.Queue, topic_override: str | None = None):
+    def __init__(self, room_id: str, queue: asyncio.Queue, topic_override: str | None = None,
+                 session_id: str | None = None):
         self.queue = queue
         self.history: list[DebateMessage] = []
         self.pending_user_msgs: list[dict] = []
@@ -87,6 +89,25 @@ class DebateEngine:
             raise RuntimeError(f"房间不存在: {room_id}")
         self.room = room
         self.topic = (topic_override or room.get("topic") or "").strip() or "(无议题)"
+
+        # session: 复用 (resume) 或新建
+        if session_id:
+            sess = db.get_session(session_id)
+            if sess is None or sess["room_id"] != room_id:
+                raise RuntimeError(f"会话不存在或不属于该房间: {session_id}")
+            self.session_id = session_id
+            self.topic = sess["topic"]
+            # 把已有消息回灌到 history (供 transcript 构建)
+            for m in db.get_messages(session_id):
+                self.history.append(DebateMessage(
+                    id=m["id"], role=m["role"], name=m["name"], emoji=m["emoji"] or "",
+                    color=m["color"] or "", content=m["content"], round=int(m["round"] or 0),
+                    ts=float(m["ts"]),
+                ))
+            db.update_session_status(session_id, "running")
+        else:
+            sess = db.create_session(room_id=room_id, topic=self.topic)
+            self.session_id = sess["id"]
 
         moderator = get_agent(cfg, room.get("moderator_id", ""))
         if moderator is None or not moderator.get("is_moderator"):
@@ -123,6 +144,7 @@ class DebateEngine:
 
     async def _emit(self, msg: DebateMessage):
         self.history.append(msg)
+        db.append_message(self.session_id, msg.to_dict())
         await self.queue.put({"type": "message", "data": msg.to_dict()})
 
     async def _emit_status(self, text: str):
@@ -143,6 +165,7 @@ class DebateEngine:
             color=p["color"], content=text, round=-1,
         )
         self.history.append(msg)
+        db.append_message(self.session_id, msg.to_dict())
         self.pending_user_msgs.append({"id": msg.id, "text": text, "consumed": False})
         # 用户插话:额外赠送 N 轮预算,让讨论可以继续
         self.max_turns += self.extension_per_user_msg
@@ -220,6 +243,7 @@ class DebateEngine:
             color=p["color"], content=display, round=rnd, ts=time.time(),
         )
         self.history.append(msg)
+        db.append_message(self.session_id, msg.to_dict())
         await self.queue.put({
             "type": "stream_end",
             "data": {"id": msg_id, "content": display, "ts": time.time()},
@@ -336,10 +360,12 @@ class DebateEngine:
                                      temperature=0.4, strip_directive=True)
         except Exception as e:
             p = self.moderator
-            self.history.append(DebateMessage(
+            msg = DebateMessage(
                 id=str(uuid.uuid4()), role=p["id"], name=p["name"], emoji=p["emoji"],
                 color=p["color"], content=f"(最终总结生成失败:{e})", round=self.turn_count + 1,
-            ))
+            )
+            self.history.append(msg)
+            db.append_message(self.session_id, msg.to_dict())
 
     # ------------------------------------------------------------------
     # main loop
@@ -386,8 +412,12 @@ class DebateEngine:
                 await self._emit_status("生成最终总结...")
                 await self._final_verdict()
                 await self._emit_status("辩论结束 ✅")
+                db.update_session_status(self.session_id, "done")
                 await self.queue.put({"type": "done", "data": {}})
+            else:
+                db.update_session_status(self.session_id, "cancelled")
         except Exception as e:
+            db.update_session_status(self.session_id, "cancelled")
             await self.queue.put({"type": "error", "data": {"text": str(e)}})
 
     def cancel(self):

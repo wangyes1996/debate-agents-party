@@ -1,4 +1,4 @@
-/* room.html — live debate WS client, room_id-driven */
+/* room.html — live debate WS client, room_id-driven, history-aware. */
 $(async function () {
   const params = new URLSearchParams(location.search);
   const roomId = params.get("id");
@@ -15,6 +15,9 @@ $(async function () {
   const $msgsInner = $("#msgs-inner");
   const $status = $("#status");
   const $thinking = $("#thinking-inner");
+  const $start = $("#start");
+  const $restart = $("#restart");
+  const $finalize = $("#finalize");
 
   if (window.marked) marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
   function renderMarkdown(text) {
@@ -23,6 +26,7 @@ $(async function () {
   }
 
   const streams = {};
+  const seenMsgIds = new Set();
   const NEAR_BOTTOM_PX = 80;
   let stickToBottom = true;
   function recomputeStick() {
@@ -51,6 +55,8 @@ $(async function () {
   }
 
   function renderMsg(m, opts) {
+    if (m.id && seenMsgIds.has(m.id)) return null;
+    if (m.id) seenMsgIds.add(m.id);
     const cssRole = m.role === "user" ? "user" : (m.role === room.moderator_id ? "moderator" : "");
     const $el = $(`
       <div class="msg ${cssRole}" data-id="${m.id}">
@@ -70,6 +76,13 @@ $(async function () {
     return $el;
   }
 
+  function clearAll() {
+    $msgsInner.empty();
+    $thinking.empty();
+    seenMsgIds.clear();
+    for (const k of Object.keys(streams)) delete streams[k];
+  }
+
   function clearThinking(role) {
     if (!role) $thinking.empty();
     else $thinking.find(`[data-role="${role}"]`).remove();
@@ -87,12 +100,42 @@ $(async function () {
     maybeScrollBottom();
   }
 
+  // ---- load history first ----
+  let active = false;
+  try {
+    const h = await $.get(`/api/rooms/${encodeURIComponent(roomId)}/history`);
+    active = !!h.active;
+    if (h.session && h.session.topic) {
+      $("#topic").text("议题:" + h.session.topic);
+    }
+    if (h.messages && h.messages.length) {
+      for (const m of h.messages) renderMsg(m);
+      stickToBottom = true; maybeScrollBottom();
+    }
+    if (active) {
+      $status.text("辩论进行中,正在接入…");
+    } else if (h.messages && h.messages.length) {
+      $status.text("已加载历史 — 可点「重启」开始新一轮,或继续插话");
+      $start.show();
+    } else {
+      $status.text("尚未开始辩论 — 点「开始辩论」启动");
+      $start.show();
+    }
+  } catch (e) {
+    $status.text("加载历史失败:" + (e.responseJSON?.detail || e.statusText || e.message));
+  }
+
+  // ---- websocket ----
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${wsProto}//${location.hostname}:8000/ws/debate`);
 
   ws.onopen = () => {
-    $status.text("已连接,启动辩论…");
-    ws.send(JSON.stringify({ type: "start", room_id: roomId }));
+    if (active) {
+      ws.send(JSON.stringify({ type: "attach", room_id: roomId }));
+    } else {
+      // passive attach so server can route future events for this room without auto-starting
+      ws.send(JSON.stringify({ type: "attach", room_id: roomId }));
+    }
   };
   ws.onclose = () => { $status.text("连接已关闭"); clearThinking(); };
   ws.onerror = () => { $status.text("连接错误"); };
@@ -104,8 +147,9 @@ $(async function () {
     else if (t === "thinking") { if (d.on) showThinking(d); else clearThinking(d.role); }
     else if (t === "stream_start") {
       clearThinking(d.role);
+      if (seenMsgIds.has(d.id)) return;  // already in history
       const $el = renderMsg({ id: d.id, role: d.role, name: d.name, emoji: d.emoji, color: d.color, round: d.round, ts: d.ts, content: "" }, { streaming: true });
-      streams[d.id] = { $content: $el.find(".content"), text: "", role: d.role };
+      if ($el) streams[d.id] = { $content: $el.find(".content"), text: "", role: d.role };
     } else if (t === "stream_chunk") {
       const s = streams[d.id]; if (!s) return;
       s.text += d.delta;
@@ -116,7 +160,7 @@ $(async function () {
       setBubbleContent(s.$content, s.role, d.content || s.text, { streaming: false });
       delete streams[d.id];
     } else if (t === "message") {
-      if (d.role === "user") return;  // we render locally
+      // user_message or final-verdict snapshot — render unless dup
       renderMsg(d);
     } else if (t === "error") {
       $status.text("错误:" + (d.text || "")); clearThinking();
@@ -125,6 +169,12 @@ $(async function () {
       clearThinking();
     } else if (t === "done") {
       $status.text("辩论结束 ✅"); clearThinking();
+      $start.show();
+    } else if (t === "started" || t === "restarted") {
+      $status.text(t === "restarted" ? "已重启辩论…" : "已启动辩论…");
+      $start.hide();
+    } else if (t === "attached") {
+      if (d.active) { $start.hide(); $status.text("已接入进行中的辩论"); }
     }
   };
 
@@ -142,7 +192,33 @@ $(async function () {
   const goHome = () => { try { ws.close(); } catch(e){} location.href = "/"; };
   $("#back").on("click", goHome);
   $("#home").on("click", goHome);
-  $("#finalize").on("click", () => {
+
+  $start.on("click", () => {
+    if (ws.readyState !== 1) return;
+    $start.hide();
+    $status.text("正在启动辩论…");
+    ws.send(JSON.stringify({ type: "start", room_id: roomId }));
+  });
+
+  $restart.on("click", () => {
+    const curTopic = $("#topic").text().replace(/^议题:/, "").trim();
+    const newTopic = prompt("新议题(留空保持原议题):", curTopic) ;
+    if (newTopic === null) return;
+    const clear = confirm("清空之前的历史记录?\n确定 = 清空 / 取消 = 保留旧 session,新开一轮");
+    if (ws.readyState !== 1) { $status.text("未连接"); return; }
+    if (clear) clearAll();
+    $status.text("正在重启辩论…");
+    $start.hide();
+    ws.send(JSON.stringify({
+      type: "restart",
+      room_id: roomId,
+      topic: newTopic.trim() || null,
+      clear_history: clear,
+    }));
+    if (newTopic.trim()) $("#topic").text("议题:" + newTopic.trim());
+  });
+
+  $finalize.on("click", () => {
     if (ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "finalize" }));
       $status.text("正在生成最终总结…");

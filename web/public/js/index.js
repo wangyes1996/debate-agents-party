@@ -89,10 +89,9 @@ $(async function () {
         <input type="checkbox" ${on ? "checked" : ""} value="${a.id}">
         <span class="emoji">${a.emoji}</span><span class="name">${escapeHtml(a.name)}</span>
       </label>`);
-      $chip.on("click", function (e) {
-        const $cb = $(this).find("input");
-        if (e.target.tagName !== "INPUT") $cb.prop("checked", !$cb.prop("checked"));
-        $(this).toggleClass("on", $cb.prop("checked"));
+      // 让浏览器原生的 label→input 联动来翻转 checkbox,我们只同步视觉态
+      $chip.find("input").on("change", function () {
+        $chip.toggleClass("on", this.checked);
       });
       $ag.append($chip);
     });
