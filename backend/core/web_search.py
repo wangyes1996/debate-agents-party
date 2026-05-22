@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import json
+import os
 import re
 import time
 from urllib.parse import quote_plus, unquote
@@ -94,6 +95,46 @@ def _parse_bing(html: str, max_results: int) -> list[dict]:
         if len(out) >= max_results:
             break
     return out
+
+
+_SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888").rstrip("/")
+
+
+async def _searxng_search(query: str, max_results: int = 4) -> list[dict]:
+    """Hit a local SearXNG JSON endpoint.
+
+    SearXNG aggregates Google/Brave/Bing/DDG/Wikipedia etc. and gives us
+    clean JSON without per-engine scraping. Primary source. Returns
+    [{"_error": ...}] on connection refused so caller falls back.
+
+    Start one locally via `scripts/run_searxng.sh` (see README). Override
+    URL with $SEARXNG_URL.
+    """
+    url = f"{_SEARXNG_URL}/search"
+    params = {"q": query, "format": "json", "safesearch": "0"}
+    headers = {"User-Agent": _UA, "Accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as c:
+            r = await c.get(url, params=params, headers=headers)
+        if r.status_code != 200:
+            return [{"_error": f"searxng http {r.status_code}"}]
+        data = r.json()
+        out: list[dict] = []
+        for item in (data.get("results") or [])[:max_results]:
+            href = item.get("url") or ""
+            if not href:
+                continue
+            out.append(
+                {
+                    "title": (item.get("title") or "").strip(),
+                    "href": href,
+                    "body": (item.get("content") or "").strip(),
+                    "_engine": item.get("engine") or "searxng",
+                }
+            )
+        return out
+    except Exception as e:
+        return [{"_error": f"searxng {type(e).__name__}: {str(e)[:120]}"}]
 
 
 async def _bing_search(query: str, max_results: int = 4) -> list[dict]:
@@ -239,9 +280,20 @@ async def search(query: str, max_results: int = 4) -> list[dict]:
     if hit and now - hit[0] < _CACHE_TTL:
         return hit[1]
 
-    # Primary: Bing en-US
-    bing = await _bing_search(query, max_results=max_results * 2)
-    clean = [r for r in bing if "_error" not in r and not _is_noise(r.get("href", ""))]
+    # Primary: local SearXNG aggregator (Google + Brave + DDG + Wikipedia ...)
+    sx = await _searxng_search(query, max_results=max_results * 2)
+    clean = [r for r in sx if "_error" not in r and not _is_noise(r.get("href", ""))]
+
+    # Fallback chain: Bing → DDG, only if SearXNG returned nothing useful
+    bing: list[dict] = []
+    if len(clean) < 2:
+        bing = await _bing_search(query, max_results=max_results * 2)
+        bing_clean = [r for r in bing if "_error" not in r and not _is_noise(r.get("href", ""))]
+        seen = {r["href"] for r in clean}
+        for r in bing_clean:
+            if r["href"] not in seen:
+                clean.append(r)
+                seen.add(r["href"])
 
     # Fallback to DDG if Bing returned nothing useful
     if len(clean) < 2:
@@ -259,7 +311,7 @@ async def search(query: str, max_results: int = 4) -> list[dict]:
         _CACHE[key] = (now, clean)
         return clean
     # Surface errors so the agent (and our logs) can see what happened
-    errs = [r for r in (bing or []) if "_error" in r]
+    errs = [r for r in (sx or []) if "_error" in r] + [r for r in (bing or []) if "_error" in r]
     return errs or []
 
 
@@ -278,27 +330,46 @@ async def decide_queries(
 
     Returns a list of 0-2 short queries. Never raises — returns [] on failure.
     """
+    # Build a compact persona hint — the first 400 chars of agent_system
+    # are usually their role definition / stance.
+    persona_hint = (agent_system or "").strip()[:400]
+
     prompt = (
-        f"你扮演辩论参与者「{agent_name}」。下一步你要发言。\n"
-        f"辩论议题:{topic}\n"
-        f"主持人刚刚的问题:{moderator_question or '(暂无具体问题)'}\n\n"
-        f"【最近发言节选】\n{transcript_tail[-1200:]}\n\n"
-        f"在发言之前,你可以选择联网搜索 0-2 条 query 用来核实事实/数据/最新事件。\n\n"
-        f"⚠️ **query 必须用英文**(搜索引擎走 en-US 区域,中文 query 会被路由到错误国家返回垃圾)。\n"
-        f"⚠️ **query 必须具体、有信息量**:\n"
-        f"  ✅ 好:`US China semiconductor sanctions May 2026`、`Trump China tariff announcement 2026`\n"
-        f"  ✅ 好:`Bitcoin price USD today site:coinmarketcap.com`\n"
-        f"  ❌ 烂:`China US relations`、`中美关系`、`Bitcoin price`(太宽泛,只能拿到 Wikipedia/官网首页)\n"
-        f"  规则:加年份/月份、加事件关键词、必要时加 `site:` 限定知名媒体(reuters.com / ft.com / bloomberg.com / nytimes.com / scmp.com / chinadaily.com.cn)。\n\n"
-        f"⚠️ 强制规则:\n"
-        f"1. 若问题/议题/最近发言中出现以下任一意图,必须返回至少 1 条 query:\n"
-        f"   - 让你「测试联网」「尝试搜索」「证明能联网」「现场搜一下」\n"
-        f"   - 涉及「今天/此刻/最新/实时/当前价格/最近新闻/2025/2026」等时效性词\n"
-        f"   - 涉及具体数字、统计、报告、人物现状、产品发布日期\n"
-        f"2. 只有当议题是**纯观点哲学辩论**且无任何时效/事实点时,才能返回空列表。\n\n"
+        f"你是辩论参与者「{agent_name}」,正准备发言反驳/推进观点。\n\n"
+        f"【你的角色定位 / 立场】\n{persona_hint}\n\n"
+        f"【辩论议题】{topic}\n"
+        f"【主持人最新问题】{moderator_question or '(无)'}\n\n"
+        f"【最近发言(含对手论据)】\n{transcript_tail[-1600:]}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"在发言之前,你要主动联网搜索 0-2 条 query,目的是**为你的立场找弹药、为反驳对手找硬证据**。\n"
+        f"把搜索当成辩论武器,不是百科查询。\n\n"
+        f"🎯 **三类高价值搜索方向**(按优先级):\n"
+        f"  A. **支撑己方**:找数据/报告/案例直接印证你的立场。\n"
+        f"     例:批判者面对「AI 推动生产力」议题 → `AI productivity paradox MIT study 2025`\n"
+        f"  B. **反驳对手**:对手刚提出某论据/数据/案例,搜它的反例、过时性、错误。\n"
+        f"     例:对手引「某公司用 AI 降本 40%」→ `<that company> AI layoffs failure 2026`\n"
+        f"  C. **核实事实**:涉及具体数字、日期、价格、人物现状,必须搜确认。\n\n"
+        f"⚠️ **query 硬规则**:\n"
+        f"  1. **必须英文**(en-US 区域才返真新闻;中文 query 会拿到垃圾)。\n"
+        f"  2. **必须具体**:加年份/月份 + 具体事件/公司/人物 + 必要时 `site:` 限定。\n"
+        f"     ✅ `Trump China tariff May 2026 Reuters`\n"
+        f"     ✅ `US semiconductor export ban Nvidia 2026 site:ft.com`\n"
+        f"     ✅ `EV subsidy phaseout China 2026 statistics`\n"
+        f"     ❌ `China US relations` / `AI productivity` / `中美贸易`(全宽泛,只返 Wikipedia)\n"
+        f"  3. **角色立场要带进 query**:\n"
+        f"     - 现实主义者搜「decoupling cost / structural conflict」类\n"
+        f"     - 理想主义者搜「cooperation success climate agreement」类\n"
+        f"     - 批判者搜「failure / collapse / contradiction」类\n"
+        f"  4. **如果对手最近一轮抛了具体数据/案例,优先搜反例**,这是最高 ROI。\n\n"
+        f"⚠️ **必搜场景**(出现任一即必须返回 ≥1 条 query):\n"
+        f"  - 议题/问题/最近发言含「最新/今天/此刻/2025/2026/最近新闻」等时效词\n"
+        f"  - 对手发言里出现具体公司名、人名、数字、日期、报告名 → 你应该搜来核实或找反例\n"
+        f"  - 用户明确让你「搜一下/测试联网/找证据」\n"
+        f"  - 议题本身是事实性而非纯哲学(几乎所有现实议题都是)\n"
+        f"只有当议题是**100% 抽象哲学**(如「自由意志是否存在」)且对手也没扔具体数据时,才能返回空。\n\n"
         f"严格只输出一个 JSON 对象,形如:\n"
         f'{{\"queries\": [\"specific english query 1\", \"specific english query 2\"]}}\n'
-        f"queries 最多 2 条,每条 4-10 个词,英文,具体可检索。不要解释,不要 markdown。"
+        f"queries 最多 2 条,每条 4-12 个词,英文,具体可检索。不要解释,不要 markdown。"
     )
     try:
         raw = await chat(

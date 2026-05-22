@@ -14,3 +14,10 @@ backend/**/__pycache__/
 /data/*.db
 /data/*.db-wal
 /data/*.db-shm
+
+# SearXNG local install (one-time, ~80MB)
+.searxng-venv/
+.searxng-src/
+.searxng-settings.yml
+.searxng.pid
+.searxng.log
