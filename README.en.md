@@ -4,7 +4,9 @@
 
 [English](./README.en.md) · [中文](./README.md)
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![frontend](https://img.shields.io/badge/frontend-jQuery-yellow) ![license](https://img.shields.io/badge/license-MIT-green)
+![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688) ![LLM](https://img.shields.io/badge/LLM-multi--agent-purple) ![license](https://img.shields.io/badge/license-MIT-green)
+
+**Keywords**: multi-agent · LLM debate · AI agents · agent orchestration · ChatGPT · DeepSeek · doubao · volcengine · FastAPI · WebSocket streaming · prompt engineering · agent framework · realtime chat · LLM roleplay
 
 ---
 
@@ -226,6 +228,17 @@ debate-agents-party/
 │       └── css/app.css
 └── docker-compose.yml
 ```
+
+---
+
+## 🎯 Use Cases
+
+- 🎓 **Teaching** — Multi-role stance debates for philosophy / law / ethics classrooms
+- 💼 **Product decisions** — Roleplay PM / engineer / finance / user perspectives
+- ✍️ **Writing aid** — Let multiple AI personas cross-examine each other on a thesis
+- 🔬 **LLM evaluation** — Same topic across different models, compare reasoning & stance
+- 🧪 **Prompt experiments** — See how system-prompt tweaks shift persona behavior
+- 🎮 **AI roleplay entertainment** — 10 distinct AIs arguing about a meme — instant theater
 
 ---
 

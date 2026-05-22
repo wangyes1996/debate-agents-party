@@ -4,7 +4,9 @@
 
 [English](./README.en.md) · [中文](./README.md)
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![frontend](https://img.shields.io/badge/frontend-jQuery-yellow) ![license](https://img.shields.io/badge/license-MIT-green)
+![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688) ![LLM](https://img.shields.io/badge/LLM-multi--agent-purple) ![license](https://img.shields.io/badge/license-MIT-green)
+
+**Keywords**: multi-agent · LLM debate · AI agents · agent orchestration · ChatGPT · DeepSeek · 豆包 · 火山方舟 · FastAPI · WebSocket streaming · 多智能体辩论 · prompt engineering · agent framework · realtime chat · roleplay
 
 ---
 
@@ -237,6 +239,17 @@ debate-agents-party/
 │       └── css/app.css
 └── docker-compose.yml
 ```
+
+---
+
+## 🎯 适用场景 / Use Cases
+
+- 🎓 **教学演示** —— 哲学 / 法律 / 伦理课堂的多角色立场辩论，学生看到不同视角同时碰撞
+- 💼 **产品决策** —— 用 AI roleplay 模拟 PM / 工程师 / 财务 / 用户等不同利益方观点
+- ✍️ **写作辅助** —— 让多个 AI 角色围绕一个论题相互质询，输出更有张力的内容
+- 🔬 **LLM 评测** —— 把同一个议题丢给不同模型扮演的 agent，观察立场和推理差异
+- 🧪 **Prompt 工程实验** —— 测试 system prompt 微调如何改变角色立场和辩论风格
+- 🎮 **AI roleplay 娱乐** —— 让 10 个性格各异的 AI 围绕一个梗辩论，自带剧本效果
 
 ---
 
