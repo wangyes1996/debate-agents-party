@@ -1,17 +1,26 @@
-"""Web search via DuckDuckGo (ddgs package) — free, no API key, no quota.
+"""Web search via Bing HTML scraping — free, no API key, no quota.
 
-Two helpers:
+ddgs package proved unreliable (DuckDuckGo returns 202 anti-bot, fallback
+backends route to unreachable domains). Bing's public search page works fine
+with a plain httpx GET + regex parsing, so we hit it directly.
+
+Public API:
 - `decide_queries(...)`: ask the agent's own LLM whether/what to search.
-- `search(...)`: run DuckDuckGo text search (offloaded to a thread, ddgs is sync).
+- `search(...)`: run Bing text search (async via httpx).
+- `format_results_for_prompt(...)`: render results as a markdown block.
 
-Both return cheap/graceful fallbacks on error so a flaky network never kills a turn.
+All paths swallow exceptions and return graceful empties so a flaky network
+never kills a debate turn.
 """
 from __future__ import annotations
 import asyncio
+import html as _html
 import json
 import re
 import time
-from functools import lru_cache
+from urllib.parse import quote_plus, unquote
+
+import httpx
 
 from .llm import chat
 
@@ -19,17 +28,90 @@ from .llm import chat
 _CACHE: dict[str, tuple[float, list[dict]]] = {}
 _CACHE_TTL = 600.0
 
+_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
-async def _ddg_search_sync(query: str, max_results: int = 4) -> list[dict]:
-    """Run ddgs in a thread (it's a sync library)."""
-    def _run():
+# Bing result block: <li class="b_algo">...<h2><a href="URL">TITLE</a></h2>...<p>SNIPPET</p>...
+_BLOCK_RE = re.compile(r'<li class="b_algo".*?</li>', re.DOTALL)
+_TITLE_RE = re.compile(r'<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h2>', re.DOTALL)
+# Bing wraps real URLs in /ck/a?...&u=a1<base64>&...  — sometimes
+_BING_REDIR_RE = re.compile(r'/ck/a\?.*?&u=a1([^&]+)')
+# Snippet candidates (Bing markup varies)
+_SNIPPET_RES = [
+    re.compile(r'<p class="b_lineclamp[^"]*"[^>]*>(.*?)</p>', re.DOTALL),
+    re.compile(r'<p class="b_paractl[^"]*"[^>]*>(.*?)</p>', re.DOTALL),
+    re.compile(r'<div class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>', re.DOTALL),
+    re.compile(r'<p[^>]*>(.*?)</p>', re.DOTALL),
+]
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_tags(s: str) -> str:
+    return _html.unescape(_TAG_RE.sub("", s or "")).strip()
+
+
+def _decode_bing_url(href: str) -> str:
+    """Bing sometimes wraps result URLs in /ck/a?u=a1<b64>. Unwrap when present."""
+    if not href:
+        return ""
+    href = _html.unescape(href)  # &amp; -> &
+    m = _BING_REDIR_RE.search(href)
+    if not m:
+        return href
+    import base64
+    raw = m.group(1)
+    # Bing's b64 may be padded oddly; try a few variants
+    for candidate in (raw, raw + "=", raw + "==", raw + "==="):
         try:
-            from ddgs import DDGS
-            with DDGS() as d:
-                return list(d.text(query, max_results=max_results, region="wt-wt"))
-        except Exception as e:
-            return [{"_error": str(e)}]
-    return await asyncio.to_thread(_run)
+            decoded = base64.urlsafe_b64decode(candidate).decode("utf-8", "ignore")
+            if decoded.startswith("http"):
+                return decoded
+        except Exception:
+            continue
+    return href
+
+
+def _parse_bing(html: str, max_results: int) -> list[dict]:
+    out: list[dict] = []
+    for block in _BLOCK_RE.findall(html):
+        tm = _TITLE_RE.search(block)
+        if not tm:
+            continue
+        href = _decode_bing_url(tm.group(1))
+        title = _strip_tags(tm.group(2))
+        snippet = ""
+        for rx in _SNIPPET_RES:
+            sm = rx.search(block)
+            if sm:
+                snippet = _strip_tags(sm.group(1))
+                if snippet:
+                    break
+        if not title or not href:
+            continue
+        out.append({"title": title, "href": href, "body": snippet})
+        if len(out) >= max_results:
+            break
+    return out
+
+
+async def _bing_search(query: str, max_results: int = 4) -> list[dict]:
+    """Hit Bing HTML and parse results. Returns [] on any failure."""
+    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={max(max_results, 10)}"
+    headers = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            r = await c.get(url, headers=headers)
+        if r.status_code != 200:
+            return [{"_error": f"bing http {r.status_code}"}]
+        return _parse_bing(r.text, max_results)
+    except Exception as e:
+        return [{"_error": f"{type(e).__name__}: {str(e)[:120]}"}]
 
 
 async def search(query: str, max_results: int = 4) -> list[dict]:
@@ -42,10 +124,11 @@ async def search(query: str, max_results: int = 4) -> list[dict]:
     hit = _CACHE.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
         return hit[1]
-    results = await _ddg_search_sync(query, max_results=max_results)
-    # Filter errors out of cache but still return them once
+    results = await _bing_search(query, max_results=max_results)
+    # Cache only clean results; still return errors once for diagnosis
     clean = [r for r in results if "_error" not in r]
-    _CACHE[key] = (now, clean)
+    if clean:
+        _CACHE[key] = (now, clean)
     return results
 
 
@@ -85,7 +168,6 @@ async def decide_queries(
         )
     except Exception:
         return []
-    # Be forgiving: pull first {...} block
     m = _JSON_RE.search(raw or "")
     if not m:
         return []
@@ -107,7 +189,11 @@ def format_results_for_prompt(query_to_results: dict[str, list[dict]]) -> str:
     """Turn {query: [hits]} into a compact markdown block for the system prompt."""
     if not query_to_results:
         return ""
-    lines = ["", "【🌐 你刚刚的联网搜索结果(可作为发言依据,但要批判性使用)】"]
+    lines = [
+        "",
+        "【🌐 你刚刚通过 Bing 联网搜索的结果(可作为发言依据,要批判性使用)】",
+        "你**已经联网获取了以下实时信息**,请基于它发言,不要再说「无法联网」之类的话。",
+    ]
     for q, hits in query_to_results.items():
         lines.append(f"\n▸ 搜索:「{q}」")
         if not hits:
