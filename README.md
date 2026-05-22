@@ -88,41 +88,36 @@
 
 ## 🚀 快速开始
 
-### 前置要求
-- Python 3.10+
-- Node.js 18+
+### 前置要求（系统级）
+- Python 3.10+（带 venv 模块）
+- Node.js 18+ 与 npm
+- git、curl
 - 至少一个 OpenAI 兼容 LLM 的 API key
 
-### 1. 克隆 & 安装
+### 一键安装 & 启动
 
 ```bash
 git clone https://github.com/<you>/debate-agents-party.git
 cd debate-agents-party
 
-# 后端
-python3 -m venv backend/venv
-source backend/venv/bin/activate
-pip install -r backend/requirements.txt
-
-# 前端
-cd web && npm install && cd ..
+./setup.sh        # 装后端 venv + 前端 npm + 本地 SearXNG（一次，约 1 分钟）
+./start.sh        # 同时启动 后端:8000 / 前端:3000 / SearXNG:8888
+                  # 前台跑前端，Ctrl-C 一键停所有服务
+./stop.sh         # 也可以手动停
 ```
 
-### 2. 配置第一个 LLM
+打开 **http://localhost:3000** → 先去 `/config` 添加一个 LLM（DeepSeek / 火山方舟 / OpenAI / 任意 OpenAI 兼容接口），然后回首页点示例房间或 "+ 新建辩论室"。
 
-先从模板复制一份：
+> 所有依赖都装在项目目录内（`backend/venv/`、`web/node_modules/`、`.searxng-venv/`、`.searxng-src/`），**不污染系统**，删项目目录就干净卸载。
 
-```bash
-cp config.example.json config.json
-```
+### 配置 LLM
 
-`config.json` 已被 git 忽略 —— 你的 API key 只会留在本地。两种添加凭据的方式：
+`./setup.sh` 会从 `config.example.json` 复制一份 `config.json`（已 git-ignored，你的 key 不会泄露）。两种添加凭据的方式：
 
-**方式 A —— 通过 UI（推荐）**：先启动两个服务（下一步），打开 `http://localhost:3000/config`，点"+ 添加 LLM"，填写名称 / 模型 / Base URL / API Key，保存，设为默认。
+**方式 A —— 通过 UI（推荐）**：打开 `http://localhost:3000/config`，点"+ 添加 LLM"，填名称 / 模型 / Base URL / API Key，保存，设为默认。
 
-**方式 B —— 直接编辑 JSON**：打开 `config.json`，在 `llm_configs[0]` 填上。
+**方式 B —— 直接编辑 `config.json`**，在 `llm_configs` 数组里填：
 
-DeepSeek 示例：
 ```json
 {
   "id": "deepseek-chat",
@@ -144,37 +139,22 @@ DeepSeek 示例：
 }
 ```
 
-### 3. 启动
+### 🔍 联网搜索（SearXNG，可选但强烈推荐）
 
-开两个终端：
+`./setup.sh` 会自动装一份本地 SearXNG（不依赖 redis、docker，纯 pip），让 agent 在辩论中**实时拉取真实证据**（Google / Brave / Wikipedia / 新闻聚合），反幻觉。
 
-```bash
-# 终端 1 —— 后端
-source backend/venv/bin/activate
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
-```
-
-```bash
-# 终端 2 —— 前端
-cd web && node server.js
-```
-
-浏览器打开 **http://localhost:3000**，点示例房间体验，或点"+ 新建辩论室"开你自己的。
+- 默认 bind 在 `127.0.0.1:8888`，只本机可访问
+- 启停集成在 `./start.sh` / `./stop.sh`，无感
+- 想换搜索源：编辑 `.searxng-settings.yml`
+- 想禁用搜索：在 `start.sh` 里去掉 `run_searxng.sh --bg` 那行；agent 会自动降级到 Bing/DDG 抓取，再失败则纯靠 LLM 自有知识
 
 ### 💾 持久化与数据目录
 
 - 辩论 history 落在 `data/debate.db`（SQLite，WAL 模式），**首次创建 session 时自动建立**，新克隆零配置即可启动。
 - `config.json` 只存 agents / rooms / LLM 配置，**不写入辩论内容**，方便手动编辑或版本管理。
-- 改路径：`DEBATE_DB_PATH=/var/lib/debate/debate.db uvicorn backend.main:app ...`
+- 改路径：`DEBATE_DB_PATH=/var/lib/debate/debate.db ./start.sh`
 - 清空所有 history：直接删 `data/`，下次写入自动重建。
 - 重启后端不影响已落库的历史；进入房间会自动读取最近一场 session 的消息渲染出来。
-
-### Docker（可选）
-
-```bash
-docker compose up --build
-```
-后端 `:8000`，前端 `:3000`。把 `backend/data/` 挂出来，重新构建不丢配置。
 
 ### 暴露到公网
 

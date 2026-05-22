@@ -21,3 +21,4 @@ backend/**/__pycache__/
 .searxng-settings.yml
 .searxng.pid
 .searxng.log
+.run/

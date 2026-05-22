@@ -88,41 +88,36 @@ These are *seeds* — once loaded they're rows in your config. Rename them, rewr
 
 ## 🚀 Quick start
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
+### Prerequisites (system-level)
+- Python 3.10+ (with the `venv` module)
+- Node.js 18+ and npm
+- git, curl
 - An API key for at least one OpenAI-compatible LLM provider
 
-### 1. Clone & install
+### One-shot install & run
 
 ```bash
 git clone https://github.com/<you>/debate-agents-party.git
 cd debate-agents-party
 
-# backend
-python3 -m venv backend/venv
-source backend/venv/bin/activate
-pip install -r backend/requirements.txt
-
-# frontend
-cd web && npm install && cd ..
+./setup.sh        # backend venv + frontend npm + local SearXNG (one time, ~1 min)
+./start.sh        # boots backend:8000 / frontend:3000 / SearXNG:8888
+                  # frontend runs in foreground — Ctrl-C stops everything
+./stop.sh         # or stop manually
 ```
 
-### 2. Configure your first LLM
+Open **http://localhost:3000** → go to `/config` and add an LLM (DeepSeek / Volcengine Ark / OpenAI / any OpenAI-compatible endpoint), then come back and pick the sample room or hit "+ New room".
 
-Copy the template first:
+> Everything installs inside the project directory (`backend/venv/`, `web/node_modules/`, `.searxng-venv/`, `.searxng-src/`). **Nothing touches the host system** — to uninstall, just delete the project folder.
 
-```bash
-cp config.example.json config.json
-```
+### Configure LLMs
 
-`config.json` is git-ignored — your API keys stay local. You have two options to add credentials:
+`./setup.sh` copies `config.example.json` to `config.json` (git-ignored — your keys stay local). Two ways to add credentials:
 
-**Option A — through the UI (recommended):** start the servers (next step), open `http://localhost:3000/config`, click "+ Add LLM", fill in name / model / base URL / API key, save, set it as default.
+**Option A — through the UI (recommended):** open `http://localhost:3000/config`, click "+ Add LLM", fill in name / model / base URL / API key, save, set it as default.
 
-**Option B — edit JSON directly:** open `config.json` and fill in `llm_configs[0]`.
+**Option B — edit `config.json`** directly, append to the `llm_configs` array:
 
-Example for DeepSeek:
 ```json
 {
   "id": "deepseek-chat",
@@ -133,37 +128,22 @@ Example for DeepSeek:
 }
 ```
 
-### 3. Run
+### 🔍 Web search (SearXNG, optional but strongly recommended)
 
-Two terminals:
+`./setup.sh` ships a local SearXNG (pure pip — no redis, no docker) so agents can **pull real evidence in real time** (Google / Brave / Wikipedia / news) instead of hallucinating.
 
-```bash
-# terminal 1 — backend
-source backend/venv/bin/activate
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
-```
-
-```bash
-# terminal 2 — frontend
-cd web && node server.js
-```
-
-Open **http://localhost:3000** and click the sample room, or hit "+ New room" to create your own.
+- Bound to `127.0.0.1:8888`, local-only
+- Lifecycle is managed by `./start.sh` / `./stop.sh` — no manual setup
+- Change search engines: edit `.searxng-settings.yml`
+- Disable: comment out `run_searxng.sh --bg` in `start.sh`; agents will fall back to Bing/DDG scraping, then to LLM-only answers
 
 ### 💾 Persistence & data directory
 
 - Debate history is stored in `data/debate.db` (SQLite, WAL). The DB and `data/` directory are **created lazily on first write** — zero-config for a fresh clone.
 - `config.json` only holds agents / rooms / LLM configs. Debate transcripts are kept out of it, so the file stays small and easy to hand-edit or version.
-- Override path: `DEBATE_DB_PATH=/var/lib/debate/debate.db uvicorn backend.main:app ...`
+- Override path: `DEBATE_DB_PATH=/var/lib/debate/debate.db ./start.sh`
 - Wipe all history: just `rm -rf data/` — it will be recreated on the next debate.
 - Restarting the backend doesn't affect saved history; reopening a room auto-loads the latest session.
-
-### Docker (optional)
-
-```bash
-docker compose up --build
-```
-Backend on `:8000`, frontend on `:3000`. Mount `backend/data/` to persist your config across rebuilds.
 
 ### Exposing to the public internet
 
