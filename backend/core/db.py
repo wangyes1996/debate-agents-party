@@ -150,11 +150,15 @@ def latest_session_for_room(room_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def list_sessions_for_room(room_id: str, limit: int = 20) -> list[dict]:
+def list_sessions_for_room(room_id: str, limit: int = 50) -> list[dict]:
+    """Returns sessions with msg_count for the drawer UI."""
     _ensure_init()
     conn = _connect()
     rows = conn.execute(
-        "SELECT * FROM debate_sessions WHERE room_id=? ORDER BY created_at DESC LIMIT ?",
+        "SELECT s.*, "
+        "(SELECT COUNT(*) FROM debate_messages m WHERE m.session_id=s.id) AS msg_count "
+        "FROM debate_sessions s WHERE s.room_id=? "
+        "ORDER BY s.created_at DESC LIMIT ?",
         (room_id, limit),
     ).fetchall()
     conn.close()

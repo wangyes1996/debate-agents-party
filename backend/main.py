@@ -175,6 +175,29 @@ async def clear_room_history(room_id: str):
     return {"ok": True}
 
 
+@app.get("/api/rooms/{room_id}/sessions")
+async def list_room_sessions(room_id: str):
+    """All historical debate sessions for the room (for drawer UI)."""
+    r = get_room(load_config(), room_id)
+    if r is None:
+        raise HTTPException(404, "room not found")
+    sessions = db.list_sessions_for_room(room_id, limit=100)
+    active_sid = None
+    handle = ROOM_ENGINES.get(room_id)
+    if handle and not handle.engine.cancelled:
+        active_sid = handle.engine.session_id
+    return {"sessions": sessions, "active_session_id": active_sid}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_detail(session_id: str):
+    sess = db.get_session(session_id)
+    if sess is None:
+        raise HTTPException(404, "session not found")
+    msgs = db.get_messages(session_id)
+    return {"session": sess, "messages": msgs}
+
+
 # --- engine registry (one engine per room, many WS subscribers) -------------
 
 class EngineHandle:

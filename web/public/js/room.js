@@ -143,6 +143,11 @@ $(async function () {
   ws.onmessage = (ev) => {
     const evt = JSON.parse(ev.data);
     const t = evt.type, d = evt.data || {};
+    // when viewing an old session (read-only), suppress live render
+    if (typeof viewingSessionId !== "undefined" && viewingSessionId !== null) {
+      if (t === "stream_start" || t === "stream_chunk" || t === "stream_end"
+          || t === "message" || t === "thinking") return;
+    }
     if (t === "status") $status.text(d.text || "");
     else if (t === "thinking") { if (d.on) showThinking(d); else clearThinking(d.role); }
     else if (t === "stream_start") {
@@ -224,4 +229,72 @@ $(async function () {
       $status.text("正在生成最终总结…");
     }
   });
+
+  // ---- history drawer ----
+  const $drawer = $("#drawer"), $mask = $("#drawer-mask"), $list = $("#drawer-list");
+  let viewingSessionId = null; // null = live (latest), else read-only viewing
+
+  function openDrawer() { $drawer.addClass("open"); $mask.addClass("open"); loadSessions(); }
+  function closeDrawer() { $drawer.removeClass("open"); $mask.removeClass("open"); }
+  $("#history").on("click", openDrawer);
+  $("#drawer-close").on("click", closeDrawer);
+  $mask.on("click", closeDrawer);
+
+  function fmtDate(ts) {
+    const d = new Date(ts * 1000);
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function loadSessions() {
+    $list.html('<div class="drawer-empty">加载中…</div>');
+    try {
+      const r = await $.get(`/api/rooms/${encodeURIComponent(roomId)}/sessions`);
+      const sessions = r.sessions || [];
+      const activeSid = r.active_session_id;
+      if (!sessions.length) {
+        $list.html('<div class="drawer-empty">尚无历史 session</div>');
+        return;
+      }
+      $list.empty();
+      sessions.forEach(s => {
+        const isActive = s.id === activeSid;
+        const isLoaded = s.id === viewingSessionId || (viewingSessionId == null && isActive);
+        const status = s.status || "—";
+        const badgeCls = status === "running" ? "running"
+                       : status === "done" ? "done" : "cancelled";
+        const $row = $(`
+          <div class="sess-item ${isActive ? 'active' : ''} ${isLoaded ? 'loaded' : ''}" data-sid="${s.id}">
+            <div class="sess-topic">${escapeHtml(s.topic || '(无议题)')}</div>
+            <div class="sess-meta">
+              <span>${fmtDate(s.created_at)} · ${s.msg_count || 0} 条</span>
+              <span class="sess-badge ${badgeCls}">${isActive ? '● 进行中' : status}</span>
+            </div>
+          </div>`);
+        $row.on("click", () => viewSession(s.id, isActive));
+        $list.append($row);
+      });
+    } catch (e) {
+      $list.html('<div class="drawer-empty">加载失败:' + (e.responseJSON?.detail || e.statusText) + '</div>');
+    }
+  }
+
+  async function viewSession(sid, isActive) {
+    try {
+      const d = await $.get(`/api/sessions/${encodeURIComponent(sid)}`);
+      clearAll();
+      if (d.session && d.session.topic) $("#topic").text("议题:" + d.session.topic);
+      (d.messages || []).forEach(m => renderMsg(m));
+      stickToBottom = true; maybeScrollBottom();
+      viewingSessionId = isActive ? null : sid;
+      if (isActive) {
+        $status.text("已切回当前进行中的辩论");
+      } else {
+        $status.text(`📖 正在查看历史 session(${(d.messages||[]).length} 条,只读)— 点「重启」或选「当前」session 退出查看`);
+      }
+      closeDrawer();
+    } catch (e) {
+      alert("加载 session 失败:" + (e.responseJSON?.detail || e.statusText));
+    }
+  }
 });

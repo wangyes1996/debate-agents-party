@@ -8,6 +8,15 @@
 </head>
 <body>
 <div class="room-shell">
+  <!-- history drawer -->
+  <div id="drawer-mask" class="drawer-mask"></div>
+  <aside id="drawer" class="drawer">
+    <div class="drawer-head">
+      <span>📜 历史 Sessions</span>
+      <button id="drawer-close" class="ghost" style="padding:2px 8px;">×</button>
+    </div>
+    <div id="drawer-list" class="drawer-list">加载中…</div>
+  </aside>
   <div class="room-head">
     <div class="room-head-inner" style="display:flex;align-items:center;gap:12px;">
       <button id="home" class="ghost" title="返回主页" style="flex-shrink:0;">← 主页</button>
@@ -26,6 +35,7 @@
       <button id="send">发送</button>
       <button id="start" class="ghost" title="开始一场新辩论" style="display:none;">开始辩论</button>
       <button id="restart" class="ghost" title="重新发起辩论(可改议题)">重启</button>
+      <button id="history" class="ghost" title="查看历史 session">📜 历史</button>
       <button id="finalize" class="ghost" title="生成最终总结并结束">结束辩论</button>
       <button id="back" class="ghost">返回</button>
     </div>
