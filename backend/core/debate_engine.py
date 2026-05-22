@@ -164,10 +164,13 @@ class DebateEngine:
         return "\n".join(lines) if lines else "(刚开始)"
 
     def _roles_menu(self) -> str:
-        return ", ".join(f"{a['id']}({a['name']})" for a in self.agents)
+        return ", ".join(f"{a['id']}=@{a['name']}" for a in self.agents)
 
     def _valid_role_ids(self) -> list[str]:
         return [a["id"] for a in self.agents]
+
+    def _roster_zh(self) -> str:
+        return "、".join(f"@{a['name']}" for a in self.agents)
 
     # ------------------------------------------------------------------
     # streaming speak
@@ -280,6 +283,8 @@ class DebateEngine:
 
         user_prompt = (
             f"辩论议题:**{self.topic}**\n\n"
+            f"【在场队友】{self._roster_zh()}\n"
+            f"(若要 @点名,只能用上面这些**中文名**,不要用英文 id)\n\n"
             f"【目前为止的圆桌发言】\n{transcript}\n\n"
             f"🎤【主持人刚刚的提问 — 你必须直接回答】\n{mod_question or '(请就你的角色给出观点)'}\n\n"
             f"现在轮到你({p['name']})发言。开场第一句话就直接切入主持人的问题。"

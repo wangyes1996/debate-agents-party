@@ -9,9 +9,12 @@
 <body>
 <div class="room-shell">
   <div class="room-head">
-    <div class="room-head-inner">
-      <div class="topic" id="topic">加载中…</div>
-      <div class="meta" id="meta"></div>
+    <div class="room-head-inner" style="display:flex;align-items:center;gap:12px;">
+      <button id="home" class="ghost" title="返回主页" style="flex-shrink:0;">← 主页</button>
+      <div style="flex:1;min-width:0;">
+        <div class="topic" id="topic">加载中…</div>
+        <div class="meta" id="meta"></div>
+      </div>
     </div>
   </div>
   <div class="status-bar"><div class="status-inner" id="status">连接中…</div></div>

@@ -136,5 +136,7 @@ $(async function () {
   }
   $("#send").on("click", send);
   $("#input").on("keydown", e => { if (e.key === "Enter") send(); });
-  $("#back").on("click", () => { ws.close(); location.href = "/"; });
+  const goHome = () => { try { ws.close(); } catch(e){} location.href = "/"; };
+  $("#back").on("click", goHome);
+  $("#home").on("click", goHome);
 });
