@@ -207,6 +207,23 @@ class DebateEngine:
     def _roster_zh(self) -> str:
         return "、".join(f"@{a['name']}" for a in self.agents)
 
+    def _server_time_block(self) -> str:
+        """Inject ground-truth server time so agents stop hallucinating clocks."""
+        import datetime as _dt
+        # Beijing time = UTC+8, no DST.
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        bj = now_utc.astimezone(_dt.timezone(_dt.timedelta(hours=8)))
+        weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+        bj_str = bj.strftime("%Y年%m月%d日") + f" 星期{weekdays[bj.weekday()]} " + bj.strftime("%H:%M:%S")
+        utc_str = now_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+        return (
+            "\n\n【⏰ 服务器当前时间 — 这是「现在」的唯一权威来源】\n"
+            f"- 北京时间(UTC+8): **{bj_str}**\n"
+            f"- 协调世界时: **{utc_str}**\n"
+            "- 任何关于「此刻几点 / 今天日期 / 现在星期几」的发言,**必须以此为准**,不许从搜索结果里抄,\n"
+            "  不许凭印象编。搜索引擎拿不到实时时钟。\n"
+        )
+
     # ------------------------------------------------------------------
     # streaming speak
     # ------------------------------------------------------------------
@@ -290,7 +307,7 @@ class DebateEngine:
                 f"4. 最后一行严格输出 `[NEXT: <agent_id>]` 或 `[END]`\n"
             )
         messages = [
-            {"role": "system", "content": self.moderator.get("system", "")},
+            {"role": "system", "content": self.moderator.get("system", "") + self._server_time_block()},
             {"role": "user", "content": user_prompt},
         ]
         try:
@@ -354,7 +371,7 @@ class DebateEngine:
             f"🎤【主持人刚刚的提问 — 你必须直接回答】\n{mod_question or '(请就你的角色给出观点)'}\n\n"
             f"现在轮到你({p['name']})发言。开场第一句话就直接切入主持人的问题。"
         )
-        system = (p.get("system") or "") + ANALYST_OBEDIENCE_RULE + search_block
+        system = (p.get("system") or "") + ANALYST_OBEDIENCE_RULE + self._server_time_block() + search_block
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
@@ -368,7 +385,7 @@ class DebateEngine:
     async def _final_verdict(self):
         transcript = self._build_transcript(last_n=80)
         messages = [
-            {"role": "system", "content": self.moderator.get("system", "")},
+            {"role": "system", "content": self.moderator.get("system", "") + self._server_time_block()},
             {
                 "role": "user",
                 "content": (
