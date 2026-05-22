@@ -1,117 +1,117 @@
 # 🎙️ Debate Agents Party
 
-> A general-purpose **multi-agent debate platform** — create rooms, pick a moderator, throw in agents with different worldviews, give them a topic, and watch them argue in real time. Jump in anytime to steer the discussion.
+> 一个通用的**多 agent 辩论平台** —— 新建房间、指定主持人、放进几个不同立场的 agent，丢一个议题，看他们实时辩论。你随时可以插话引导讨论。
 
-[English](./README.md) · [中文](./README.zh-CN.md)
+[English](./README.en.md) · [中文](./README.md)
 
 ![status](https://img.shields.io/badge/status-alpha-orange) ![python](https://img.shields.io/badge/python-3.12-blue) ![frontend](https://img.shields.io/badge/frontend-jQuery-yellow) ![license](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
-## ✨ What it does
+## ✨ 它能做什么
 
-Spin up a debate room around **any topic** (philosophy, product decisions, ethics, "is coffee better than tea", ...). A **moderator agent** dispatches turns to the participants you picked, every reply streams token-by-token into a chat UI, and you can interject at any moment — the moderator will fold your input into the next round.
+围绕**任何议题**（哲学、产品决策、伦理、"咖啡好还是茶好"...）开一场辩论。**主持人 agent** 调度发言顺序，每一句回复都通过 token 流实时弹进聊天 UI。你随时可以插话 —— 主持人会在下一轮把你的问题派给最合适的角色回应。
 
-- 🧠 **Create your own agents** — name, emoji, color, system prompt, and which LLM they use
-- 🏛️ **Create rooms** — pick a moderator + participants + topic + max turns
-- 🎤 **Moderator-driven** — uses `[NEXT: role]` / `[END]` tokens to schedule speakers and end naturally
-- 🌊 **Token streaming end-to-end** — WebSocket, markdown rendered live
-- 🙋 **User interjection** — type anytime, moderator routes the response on the next turn
-- 🔌 **Multi-LLM** — any OpenAI-compatible endpoint (OpenAI, DeepSeek, Volcengine Ark, OpenRouter, local llama.cpp, ...). Different agents can use different LLMs.
+- 🧠 **自定义 agent** —— 名字、emoji、配色、system prompt、绑定哪个 LLM
+- 🏛️ **自定义房间** —— 选主持人 + 参与者 + 议题 + 最大轮次
+- 🎤 **主持人驱动** —— 用 `[NEXT: role]` / `[END]` token 调度发言、自然终结
+- 🌊 **端到端流式输出** —— WebSocket，markdown 边收边渲染
+- 🙋 **用户插话** —— 任何时候都能打字，主持人下一轮回应
+- 🔌 **多 LLM** —— 任何 OpenAI 兼容接口（OpenAI / DeepSeek / 火山方舟 / OpenRouter / 本地 llama.cpp ...），不同 agent 可以用不同 LLM
 
-### 10 preset agents (fully editable)
+### 10 个预设 agent（可编辑/删除/增补）
 
-| | Agent | Stance |
+| | 角色 | 立场 |
 |---|---|---|
-| 🎤 | **Moderator** | Neutral scheduler, drives the flow |
-| 🧱 | Realist | Resources, constraints, what actually ships |
-| ✨ | Idealist | What *should* be, vision-first |
-| 🔪 | Critic | Pokes holes in every argument |
-| 🌅 | Optimist | Upside, second-order positives |
-| 🌑 | Pessimist | Downside, second-order negatives |
-| 🔍 | Skeptic | "Where's the evidence?" |
-| 🚀 | Innovator | Reframe the question, novel angles |
-| 🛠️ | Pragmatist | Trade-offs, MVP, ship it |
-| ⚖️ | Ethicist | Who is harmed, what's fair |
+| 🎤 | **主持人** | 中立调度者，掌控节奏 |
+| 🧱 | 现实主义者 | 资源、约束、能不能落地 |
+| ✨ | 理想主义者 | 应该是什么样、愿景优先 |
+| 🔪 | 批判者 | 戳每个论点的漏洞 |
+| 🌅 | 乐观主义者 | 上行空间、二阶正向效应 |
+| 🌑 | 悲观主义者 | 下行风险、二阶负向效应 |
+| 🔍 | 怀疑论者 | "证据呢？" |
+| 🚀 | 创新者 | 重新定义问题、提出新角度 |
+| 🛠️ | 实用主义者 | 取舍、MVP、先跑起来 |
+| ⚖️ | 伦理学者 | 谁会受伤、是否公平 |
 
-These are *seeds* — once loaded they're rows in your config. Rename them, rewrite their system prompts, add 20 more, delete the ones you don't like.
+这些只是**种子** —— 加载后就变成你配置里的普通数据，可随意改名、改 system prompt、删掉不喜欢的、再加 20 个新的。
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Static frontend (Node/Express on :3000)            │
-│  Plain HTML + jQuery + marked + DOMPurify           │
-│  ├─ /          rooms list + create/edit/delete      │
-│  ├─ /agents    agents CRUD                          │
-│  ├─ /room?id=  live debate (WebSocket client)       │
-│  └─ /config    LLM configurations                   │
+│  静态前端（Node/Express，端口 3000）                │
+│  纯 HTML + jQuery + marked + DOMPurify              │
+│  ├─ /          房间列表 + 增删改                    │
+│  ├─ /agents    Agent 增删改                         │
+│  ├─ /room?id=  实时辩论（WebSocket 客户端）         │
+│  └─ /config    LLM 配置                             │
 └─────────────────┬───────────────────────────────────┘
-                  │ HTTP proxy /api/*  +  direct WS :8000
+                  │ HTTP 代理 /api/*  +  直连 WS :8000
 ┌─────────────────▼───────────────────────────────────┐
-│  FastAPI backend (:8000)                            │
+│  FastAPI 后端（端口 8000）                          │
 │  ├─ /api/agents     CRUD                            │
 │  ├─ /api/rooms      CRUD                            │
-│  ├─ /api/config     LLM configs                     │
-│  ├─ /ws/debate      WebSocket — one conn = 1 debate │
-│  └─ DebateEngine    moderator-driven orchestration  │
-│         └─ per-agent LLM client (OpenAI-compatible) │
+│  ├─ /api/config     LLM 配置                        │
+│  ├─ /ws/debate      WebSocket —— 一连接一场辩论    │
+│  └─ DebateEngine    主持人驱动的编排器              │
+│         └─ 每个 agent 一个 LLM 客户端（OpenAI 兼容）│
 └─────────────────────────────────────────────────────┘
            │
            ▼
-    backend/data/config.json   ← single source of truth
-    (llm_configs[], agents[], rooms[], schema_version: 3)
+    config.json   ← 唯一数据源
+    （llm_configs[]、agents[]、rooms[]、schema_version: 3）
 ```
 
-**Why it's small:** no Next.js, no React, no build step. The frontend is four static HTML files and a tiny Express server that proxies `/api/*` and serves static assets. Everything you can see in the UI is also a REST call you could `curl` directly.
+**为什么这么轻量**：没有 Next.js、没有 React、没有构建步骤。前端就是 4 个静态 HTML + 一个迷你 Express 转发 `/api/*` 并发静态文件。UI 上能做的事，curl 也能做。
 
-**Data model:**
-- `llm_configs[]` — `{id, name, model, base_url, api_key}` (OpenAI-compatible)
-- `agents[]` — `{id, name, emoji, color, system, llm_id, is_moderator}`
-- `rooms[]` — `{id, name, topic, moderator_id, agent_ids[], max_turns}`
-- `default_llm_id` — fallback when an agent's `llm_id` is empty
+**数据模型：**
+- `llm_configs[]` —— `{id, name, model, base_url, api_key}`（OpenAI 兼容）
+- `agents[]` —— `{id, name, emoji, color, system, llm_id, is_moderator}`
+- `rooms[]` —— `{id, name, topic, moderator_id, agent_ids[], max_turns}`
+- `default_llm_id` —— 当 agent 的 `llm_id` 为空时使用
 
 ---
 
-## 🚀 Quick start
+## 🚀 快速开始
 
-### Prerequisites
+### 前置要求
 - Python 3.10+
 - Node.js 18+
-- An API key for at least one OpenAI-compatible LLM provider
+- 至少一个 OpenAI 兼容 LLM 的 API key
 
-### 1. Clone & install
+### 1. 克隆 & 安装
 
 ```bash
 git clone https://github.com/<you>/debate-agents-party.git
 cd debate-agents-party
 
-# backend
+# 后端
 python3 -m venv backend/venv
 source backend/venv/bin/activate
 pip install -r backend/requirements.txt
 
-# frontend
+# 前端
 cd web && npm install && cd ..
 ```
 
-### 2. Configure your first LLM
+### 2. 配置第一个 LLM
 
-Copy the template first:
+先从模板复制一份：
 
 ```bash
-cp backend/data/config.example.json backend/data/config.json
+cp config.example.json config.json
 ```
 
-`config.json` is git-ignored — your API keys stay local. You have two options to add credentials:
+`config.json` 已被 git 忽略 —— 你的 API key 只会留在本地。两种添加凭据的方式：
 
-**Option A — through the UI (recommended):** start the servers (next step), open `http://localhost:3000/config`, click "+ Add LLM", fill in name / model / base URL / API key, save, set it as default.
+**方式 A —— 通过 UI（推荐）**：先启动两个服务（下一步），打开 `http://localhost:3000/config`，点"+ 添加 LLM"，填写名称 / 模型 / Base URL / API Key，保存，设为默认。
 
-**Option B — edit JSON directly:** open `backend/data/config.json` and fill in `llm_configs[0]`.
+**方式 B —— 直接编辑 JSON**：打开 `config.json`，在 `llm_configs[0]` 填上。
 
-Example for DeepSeek:
+DeepSeek 示例：
 ```json
 {
   "id": "deepseek-chat",
@@ -122,107 +122,118 @@ Example for DeepSeek:
 }
 ```
 
-### 3. Run
+火山方舟示例：
+```json
+{
+  "id": "ark-doubao",
+  "name": "豆包",
+  "model": "doubao-1-5-pro-32k-250115",
+  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+  "api_key": "你的方舟 key"
+}
+```
 
-Two terminals:
+### 3. 启动
+
+开两个终端：
 
 ```bash
-# terminal 1 — backend
+# 终端 1 —— 后端
 source backend/venv/bin/activate
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 ```bash
-# terminal 2 — frontend
+# 终端 2 —— 前端
 cd web && node server.js
 ```
 
-Open **http://localhost:3000** and click the sample room, or hit "+ New room" to create your own.
+浏览器打开 **http://localhost:3000**，点示例房间体验，或点"+ 新建辩论室"开你自己的。
 
-### Docker (optional)
+### Docker（可选）
 
 ```bash
 docker compose up --build
 ```
-Backend on `:8000`, frontend on `:3000`. Mount `backend/data/` to persist your config across rebuilds.
+后端 `:8000`，前端 `:3000`。把 `backend/data/` 挂出来，重新构建不丢配置。
 
-### Exposing to the public internet
+### 暴露到公网
 
-⚠️ The app has **no authentication**. If you put it on a public IP, anyone who finds it can burn your LLM budget. Recommended:
-- Bind to `127.0.0.1` and use an SSH tunnel: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@host`
-- Or put nginx + basic auth in front
-- Or restrict the cloud firewall to your own IP
-
----
-
-## 🧭 Typical flow
-
-1. **Configure LLMs** at `/config` — add as many as you want, mark one as default.
-2. **Build your agent roster** at `/agents` — edit the 10 seeds or create new ones. Each agent can use a different LLM (e.g. moderator on a smart model, participants on a cheap fast one).
-3. **Create a room** at `/` — pick the moderator, check the participants, write the topic, set max turns.
-4. **Click into the room** — debate starts immediately, messages stream in. Type in the input box anytime to interject.
-5. The moderator emits `[END]` when the discussion is resolved or hits the turn limit.
+⚠️ 项目**没有任何鉴权**。直接放公网 IP，谁找到都能用你配的 LLM 烧 token。建议：
+- 绑定 `127.0.0.1` + SSH 隧道：`ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@host`
+- 或者前面挂 nginx + basic auth
+- 或者云防火墙只放行你自己的 IP
 
 ---
 
-## 🔧 Customizing agents — the moderator protocol
+## 🧭 典型使用流程
 
-Participants are free-form (anything you write in the system prompt is up to you). The **moderator** is the one constrained piece: it must emit one of these tokens on its **last line**:
+1. **在 `/config` 配置 LLM** —— 想加几个加几个，选一个设为默认。
+2. **在 `/agents` 调整 agent 阵容** —— 改种子的 system prompt 或新建。每个 agent 可绑不同 LLM（比如主持人用聪明的，参与者用便宜的）。
+3. **在 `/` 新建房间** —— 选主持人、勾选参与者、写议题、设最大轮次。
+4. **进房间** —— 辩论立即开始，消息流式弹出。底部输入框随时插话。
+5. 主持人觉得讨论充分或到轮次上限时会自己输出 `[END]`，引擎让 ta 做最终总结，然后关闭连接。
 
-- `[NEXT: <agent_id>]` — pass the mic to that agent (id must be in the room's roster)
-- `[END]` — wrap up; engine then asks the moderator for a final summary and closes the WebSocket
+---
 
-If you write your own moderator agent, copy the system prompt from `backend/agents/personas.py::MODERATOR_SYSTEM` as a base. The engine also injects a small "roundtable obedience" rule into every non-moderator system prompt so participants stay on-topic and respond directly to the moderator's question.
+## 🔧 自定义 agent —— 主持人协议
+
+参与者的 system prompt 完全自由。**主持人** 是唯一受约束的角色：每一次发言的**最后一行**必须是下面两种之一：
+
+- `[NEXT: <agent_id>]` —— 把话筒交给某个 agent（id 必须在房间花名册里）
+- `[END]` —— 结束辩论；引擎随后请主持人做最终总结，然后关闭 WebSocket
+
+如果你想写自己的主持人 agent，建议从 `backend/agents/personas.py::MODERATOR_SYSTEM` 复制一份作为起点。引擎还会自动给每个**非主持人** agent 注入一段"圆桌纪律"小提示，确保 ta 直接回答主持人提的具体问题、不跑题。
 
 ---
 
 ## 📡 REST API
 
-All endpoints are unauthenticated, JSON-only.
+所有接口无鉴权、纯 JSON。
 
-| Method | Path | Body | Returns |
+| 方法 | 路径 | Body | 返回 |
 |---|---|---|---|
-| GET | `/api/config` | — | LLMs + default (api_keys masked) |
+| GET | `/api/config` | — | LLMs + 默认（api_key 已脱敏） |
 | POST | `/api/config` | `{llm_configs?, default_llm_id?}` | `{ok:true}` |
 | GET | `/api/agents` | — | `{agents:[...]}` |
-| POST | `/api/agents` | `AgentBody` | created agent |
-| PUT | `/api/agents/{id}` | `AgentBody` | updated agent |
+| POST | `/api/agents` | `AgentBody` | 新建的 agent |
+| PUT | `/api/agents/{id}` | `AgentBody` | 更新后的 agent |
 | DELETE | `/api/agents/{id}` | — | `{ok:true}` |
 | GET | `/api/rooms` | — | `{rooms:[...]}` |
-| GET | `/api/rooms/{id}` | — | room |
-| POST | `/api/rooms` | `RoomBody` | created room |
-| PUT | `/api/rooms/{id}` | `RoomBody` | updated room |
+| GET | `/api/rooms/{id}` | — | 房间详情 |
+| POST | `/api/rooms` | `RoomBody` | 新建的房间 |
+| PUT | `/api/rooms/{id}` | `RoomBody` | 更新后的房间 |
 | DELETE | `/api/rooms/{id}` | — | `{ok:true}` |
-| WS | `/ws/debate` | client → `{type:"start", room_id}` | server streams `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
+| WS | `/ws/debate` | 客户端发 `{type:"start", room_id}` | 服务端推 `stream_start` / `stream_chunk` / `stream_end` / `thinking` / `message` / `done` / `error` |
 
-WebSocket client messages:
-- `{type:"start", room_id}` — kick off a debate for the given room
-- `{type:"user_message", text}` — interjection, queued for the next round
-- `{type:"cancel"}` — stop the current debate
-- `{type:"ping"}` — heartbeat
+WebSocket 客户端消息：
+- `{type:"start", room_id}` —— 启动指定房间的一场辩论
+- `{type:"user_message", text}` —— 插话，下一轮处理
+- `{type:"cancel"}` —— 中止当前辩论
+- `{type:"ping"}` —— 心跳
 
 ---
 
-## 📁 Project layout
+## 📁 项目结构
 
 ```
 debate-agents-party/
 ├── backend/
-│   ├── main.py                  FastAPI app + WS handler
+│   ├── main.py                  FastAPI 入口 + WS 处理
 │   ├── core/
-│   │   ├── config_store.py      JSON store, schema migrations, CRUD helpers
-│   │   ├── debate_engine.py     moderator-driven orchestrator
-│   │   └── llm.py               OpenAI-compatible streaming client
+│   │   ├── config_store.py      JSON 存储、schema 迁移、CRUD 工具
+│   │   ├── debate_engine.py     主持人驱动的编排器
+│   │   └── llm.py               OpenAI 兼容流式客户端
 │   ├── agents/
-│   │   └── personas.py          10 seed agent presets + MODERATOR_SYSTEM
-│   ├── data/
-│   │   └── config.json          ← your data lives here
+│   │   └── personas.py          10 个种子 agent + 主持人 system prompt
 │   └── requirements.txt
+├── config.json                  ← 你的数据都在这（git 忽略）
+├── config.example.json          ← 模板文件，已提交
 ├── web/
-│   ├── server.js                tiny Express static + /api proxy
+│   ├── server.js                Express 静态服务 + /api 代理
 │   └── public/
 │       ├── index.html / agents.html / room.html / config.html
-│       ├── js/                  one .js per page (jQuery)
+│       ├── js/                  每页一个 .js（jQuery）
 │       └── css/app.css
 └── docker-compose.yml
 ```
@@ -231,22 +242,22 @@ debate-agents-party/
 
 ## 🗺️ Roadmap
 
-- [ ] Export a debate transcript as Markdown / share link
-- [ ] Per-room model overrides (swap LLM per-debate, not per-agent)
-- [ ] Branching debates (fork from any message)
-- [ ] Optional authentication layer
-- [ ] Memory / RAG hook so agents can cite documents
+- [ ] 导出辩论记录为 Markdown / 分享链接
+- [ ] 房间级模型覆盖（按场切换 LLM，而不是按 agent）
+- [ ] 分支辩论（从任意消息分叉）
+- [ ] 可选鉴权层
+- [ ] 记忆 / RAG 接口，让 agent 引用资料
 
 ---
 
-## 🤝 Contributing
+## 🤝 贡献
 
-PRs welcome. The codebase is intentionally small — under ~2k LOC across both halves — so it's easy to read end-to-end before changing anything.
+欢迎 PR。整个项目两端加起来不到 2k 行代码，看完再改也不费时间。
 
 ## 📄 License
 
-MIT — see [LICENSE](./LICENSE).
+MIT —— 见 [LICENSE](./LICENSE)。
 
-## 🙏 Credits
+## 🙏 鸣谢
 
-Inspired by [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents). Streaming UX details borrowed from years of staring at ChatGPT.
+灵感来自 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)。流式 UX 的细节是这些年盯着 ChatGPT 看出来的。

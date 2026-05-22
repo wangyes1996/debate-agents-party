@@ -6,6 +6,6 @@ backend/**/__pycache__/
 .DS_Store
 
 # Local runtime config — contains API keys. Use config.example.json as template.
-backend/data/config.json
-backend/data/config.json.bak
-backend/data/*.bak
+/config.json
+/config.json.bak
+/*.bak

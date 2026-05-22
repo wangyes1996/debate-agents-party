@@ -44,9 +44,8 @@ import uuid
 from pathlib import Path
 from threading import Lock
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_DATA_DIR.mkdir(parents=True, exist_ok=True)
-_CONFIG_FILE = _DATA_DIR / "config.json"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_CONFIG_FILE = _PROJECT_ROOT / "config.json"
 _LOCK = Lock()
 
 SCHEMA_VERSION = 3
