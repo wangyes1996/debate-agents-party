@@ -250,6 +250,19 @@ class DebateEngine:
                     "data": {"id": msg_id, "delta": delta},
                 })
         except Exception as e:
+            # Log full diagnostics to backend stdout (visible in .run/backend.log)
+            import sys, traceback
+            total_chars = sum(len(m.get("content", "") or "") for m in messages)
+            print(
+                f"[DEBATE] LLM call failed for role={role_id} llm_id={p.get('llm_id')} "
+                f"messages={len(messages)} total_chars={total_chars}",
+                file=sys.stderr,
+            )
+            for i, m in enumerate(messages):
+                c = m.get("content", "") or ""
+                preview = c[:200].replace("\n", " ⏎ ")
+                print(f"[DEBATE]  msg[{i}] role={m.get('role')} len={len(c)} preview={preview!r}", file=sys.stderr)
+            traceback.print_exc()
             err = f"\n\n(发言失败:{e})"
             buf += err
             await self.queue.put({"type": "stream_chunk", "data": {"id": msg_id, "delta": err}})
